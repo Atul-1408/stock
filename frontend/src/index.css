@@ -1,0 +1,152 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+  --bg-color: #020617;
+  --text-color: #e5edf8;
+  --panel-color: #101826;
+  --accent-color: #5eead4;
+  --border-color: rgba(51, 65, 85, 0.6);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+  --bg-color: #f1f5f9;
+  --text-color: #475569;
+  --panel-color: #ffffff;
+  --accent-color: #0d9488;
+  --border-color: #e2e8f0;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  font-family: "Segoe UI", "Inter", sans-serif;
+  color: var(--text-color);
+  background: var(--bg-color);
+  background-attachment: fixed;
+  transition: background-color 0.4s ease, color 0.4s ease;
+}
+
+/* Background Gradients */
+[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+[data-theme='dark'] body {
+  background:
+    radial-gradient(circle at 10% 0%, rgba(45, 212, 191, 0.08), transparent 35%),
+    radial-gradient(circle at 90% 10%, rgba(56, 189, 248, 0.08), transparent 35%),
+    #020617;
+}
+
+[data-theme='light'] body {
+  background:
+    radial-gradient(circle at 10% 0%, rgba(13, 148, 136, 0.05), transparent 40%),
+    radial-gradient(circle at 90% 10%, rgba(14, 165, 233, 0.05), transparent 40%),
+    #f8fafc;
+}
+
+.card {
+  @apply rounded-2xl border backdrop-blur-md transition-all duration-300;
+  background-color: var(--panel-color);
+  border-color: var(--border-color);
+  box-shadow: 0 4px 20px -5px rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] .card {
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
+}
+
+.card:hover {
+  @apply scale-[1.01];
+  border-color: var(--accent-color);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme='dark'] .card:hover {
+  box-shadow: 0 0 20px -5px var(--accent-color);
+}
+
+@keyframes floatIn {
+  0% {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-floatIn {
+  animation: floatIn 0.5s ease-out forwards;
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-slate-200 dark:bg-slate-800 rounded-full;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  @apply bg-teal-500/40;
+}
+
+/* ==========================================
+   TICKER TAPE MARQUEE
+   ========================================== */
+@keyframes ticker-scroll {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(-33.333%);
+  }
+}
+
+.ticker-tape-track {
+  display: inline-flex;
+  animation: ticker-scroll linear infinite;
+  will-change: transform;
+  align-items: center;
+}
+
+.ticker-tape-track:hover {
+  animation-play-state: paused;
+}
+
+.ticker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Fix for dark mode dropdowns */
+select option {
+  background-color: var(--panel-color);
+  color: var(--text-color);
+}
