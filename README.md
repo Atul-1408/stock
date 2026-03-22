@@ -22,7 +22,7 @@ This application provides real-time and historical insights into stock market da
 - [Chart.js](https://www.chartjs.org/) & react-chartjs-2 for data visualization
 - [Framer Motion](https://www.framer.com/motion/) for animations
 
-**Backend:**
+**Backend:
 - Python 3.10+
 - Flask (API serving)
 - SQLite3 (Database management)
