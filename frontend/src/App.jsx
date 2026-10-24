@@ -186,9 +186,12 @@ function App() {
 
   useEffect(() => {
     const checkBotAlerts = async () => {
+      const token = localStorage.getItem('token');
+      if (!token || token === 'undefined' || token === 'null') return;
+
       try {
         const res = await api.get('/alerts/bot');
-        if (res.data.alerts.length > 0) {
+        if (res.data?.alerts && res.data.alerts.length > 0) {
           // If the most recent one is newer than 5 minutes, show a dot
           const lastNotif = new Date(res.data.alerts[0].triggered_at);
           const now = new Date();

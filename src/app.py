@@ -15,6 +15,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
+from config import Config
 import database
 # ⚠️ IMPORTANT: Initialize DB tables FIRST before importing any other local modules.
 # Some modules (like alert_engine) access the DB at import/class-init time.
@@ -41,11 +42,42 @@ error_handler.setup_logging(app)
 error_handler.register_error_handlers(app)
 
 # JWT Configuration
-app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'sovereign-intelligence-secret-key')
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)
+app.config['JWT_SECRET_KEY'] = Config.JWT_SECRET_KEY
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=Config.JWT_ACCESS_TOKEN_EXPIRES_DAYS)
 jwt = JWTManager(app)
 
-CORS(app)
+@jwt.expired_token_loader
+def expired_token_callback(jwt_header, jwt_payload):
+    return jsonify({
+        "status": "error",
+        "error": "Token Expired",
+        "message": "Your session has expired. Please log in again."
+    }), 401
+
+@jwt.invalid_token_loader
+def invalid_token_callback(error_string):
+    return jsonify({
+        "status": "error",
+        "error": "Invalid Token",
+        "message": "Invalid authentication token."
+    }), 401
+
+@jwt.unauthorized_loader
+def missing_token_callback(error_string):
+    return jsonify({
+        "status": "error",
+        "error": "Unauthorized",
+        "message": "Authentication token is required."
+    }), 401
+
+# CORS Configuration
+CORS(
+    app,
+    resources={r"/api/*": {"origins": Config.CORS_ALLOWED_ORIGINS}},
+    supports_credentials=True,
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"]
+)
 
 @app.after_request
 def after_request(response):
@@ -58,7 +90,7 @@ limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=["5000 per day", "500 per hour"],
-    storage_uri="memory://"
+    storage_uri=Config.RATELIMIT_STORAGE_URI
 )
 
 # In-memory cache for high-traffic public endpoints
@@ -293,15 +325,17 @@ def health() -> tuple:
 @app.route('/api/auth/signup', methods=['POST'])
 @limiter.limit("5 per hour")
 def signup():
-    print(f"DEBUG: Signup request received for {request.json.get('email')}")
-    data = request.json
-    email = data.get('email')
+    data = request.json or {}
+    email = (data.get('email') or '').strip().lower()
     password = data.get('password')
-    username = data.get('username')
-    full_name = data.get('full_name')
+    username = (data.get('username') or '').strip()
+    full_name = (data.get('full_name') or '').strip()
 
     if not email or not password:
         return error_response("Email and password are required.", 400)
+
+    if len(password) < 8:
+        return error_response("Password must be at least 8 characters long.", 400)
 
     if database.get_user_by_email(email):
         return error_response("User with this email already exists.", 409)
@@ -316,17 +350,25 @@ def signup():
         return error_response("Failed to create user.", 500)
 
 @app.route('/api/auth/login', methods=['POST'])
-@limiter.limit("10 per hour")
+@limiter.limit("20 per hour; 5 per minute")
 def login():
-    data = request.json
-    email = data.get('email')
+    data = request.json or {}
+    email = (data.get('email') or '').strip().lower()
     password = data.get('password')
 
     if not email or not password:
         return error_response("Email and password are required.", 400)
 
     user = database.get_user_by_email(email)
-    if not user or user['password_hash'] == '__GOOGLE_AUTH__' or not check_password_hash(user['password_hash'], password):
+    
+    # Timing attack mitigation: always execute check_password_hash even if user not found
+    dummy_hash = "scrypt:32768:8:1$dummy$dummydummydummydummydummydummydummydummydummy"
+
+    if not user or user.get('password_hash') in ('__GOOGLE_AUTH__', '__OTP_AUTH__', None, ''):
+        check_password_hash(dummy_hash, password)
+        return error_response("Invalid email or password.", 401)
+
+    if not check_password_hash(user['password_hash'], password):
         return error_response("Invalid email or password.", 401)
 
     access_token = create_access_token(identity=str(user['id']))
@@ -337,13 +379,14 @@ def login():
 @limiter.limit("5 per minute")
 def send_otp():
     import otp_service
-    data = request.json
-    email = data.get('email')
+    from datetime import timezone
+    data = request.json or {}
+    email = (data.get('email') or '').strip().lower()
     if not email:
         return error_response("Email is required.", 400)
 
     code = otp_service.generate_otp()
-    expires_at = (datetime.utcnow() + timedelta(minutes=5)).isoformat()
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
     database.save_otp(email, code, expires_at)
 
     sent = otp_service.send_otp_email(email, code)
@@ -355,9 +398,9 @@ def send_otp():
 @app.route('/api/auth/otp/verify', methods=['POST'])
 @limiter.limit("10 per minute")
 def verify_otp_route():
-    data = request.json
-    email = data.get('email')
-    otp = data.get('otp')
+    data = request.json or {}
+    email = (data.get('email') or '').strip().lower()
+    otp = (data.get('otp') or '').strip()
 
     if not email or not otp:
         return error_response("Email and OTP are required.", 400)
@@ -381,16 +424,26 @@ def verify_otp_route():
 def google_auth():
     from google.oauth2 import id_token
     from google.auth.transport import requests as google_requests
-    from config import Config
 
-    data = request.json
+    data = request.json or {}
     credential = data.get('credential')
     if not credential:
         return error_response("Google credential is required.", 400)
 
+    if not Config.GOOGLE_CLIENT_ID:
+        return error_response("Google authentication is not configured on this server.", 503)
+
     try:
         idinfo = id_token.verify_oauth2_token(credential, google_requests.Request(), Config.GOOGLE_CLIENT_ID)
-        google_email = idinfo.get('email')
+        
+        # Verify issuer and email verification status
+        if idinfo.get('iss') not in ['accounts.google.com', 'https://accounts.google.com']:
+            return error_response("Invalid Google token issuer.", 401)
+        
+        if not idinfo.get('email_verified', False):
+            return error_response("Google account email is not verified.", 401)
+
+        google_email = (idinfo.get('email') or '').strip().lower()
         google_name = idinfo.get('name', '')
 
         if not google_email:
@@ -398,12 +451,15 @@ def google_auth():
 
         user = database.create_or_get_google_user(google_email, google_name)
         if not user:
-            return error_response("Failed to create/find user.", 500)
+            return error_response("Failed to create or find user account.", 500)
 
         access_token = create_access_token(identity=str(user['id']))
         return jsonify({"status": "success", "access_token": access_token, "user_id": user['id']}), 200
-    except ValueError as e:
-        return error_response(f"Invalid Google token: {str(e)}", 401)
+    except ValueError:
+        return error_response("Invalid Google token.", 401)
+    except Exception as e:
+        app.logger.error(f"Google auth error: {e}")
+        return error_response("Failed to authenticate with Google.", 401)
 
 @app.route('/api/auth/me', methods=['GET'])
 @jwt_required()
@@ -883,8 +939,12 @@ def update_profile():
 @app.route('/api/profile/summary/<int:user_id>', methods=['GET'])
 @jwt_required()
 def get_user_summary(user_id):
+    current_user_id = int(get_jwt_identity())
     user = database.get_user_by_id(user_id)
-    if not user: return error_response("User not found", 404)
+    if not user:
+        return error_response("User not found", 404)
+    if user_id != current_user_id and not user.get('is_public', 1):
+        return error_response("This profile is private.", 403)
     
     return jsonify({
         'username': user['username'],
@@ -1020,6 +1080,7 @@ def mark_alert_history_read_api(log_id):
     return jsonify({'success': True}), 200
 
 @app.route('/api/alerts/bot', methods=['GET'])
+@jwt_required()
 def get_bot_alerts_api():
     alerts = database.get_bot_alerts(limit=30)
     return jsonify({'alerts': alerts}), 200
@@ -1120,6 +1181,7 @@ def share_trade_api():
     return jsonify({'trade_id': trade_id}), 201
 
 @app.route('/api/social/trades', methods=['GET'])
+@jwt_required()
 def get_social_feed_api():
     trades = leaderboard_engine.get_social_feed()
     return jsonify({'trades': trades}), 200
@@ -1127,6 +1189,11 @@ def get_social_feed_api():
 @app.route('/api/social/trades/<int:user_id>', methods=['GET'])
 @jwt_required()
 def get_user_trades_api(user_id):
+    current_user_id = int(get_jwt_identity())
+    if user_id != current_user_id:
+        target = database.get_user_by_id(user_id)
+        if not target or not target.get('is_public', 1):
+            return error_response("This user's trades are private.", 403)
     trades = database.get_user_shared_trades(user_id)
     return jsonify(trades), 200
 
@@ -1370,20 +1437,20 @@ def get_market_indices():
 @app.route('/api/orders', methods=['POST'])
 @jwt_required()
 def place_order():
-    """Place a new order."""
+    """Place a new order with balance and position authorization."""
     user_id = int(get_jwt_identity())
-    data = request.json
+    data = request.json or {}
 
-    symbol = data.get('symbol')
-    side = data.get('side')
-    order_type = data.get('order_type', 'MARKET')
-    product_type = data.get('product_type', 'CNC')
+    symbol = (data.get('symbol') or '').strip().upper()
+    side = (data.get('side') or '').strip().upper()
+    order_type = (data.get('order_type') or 'MARKET').strip().upper()
+    product_type = (data.get('product_type') or 'CNC').strip().upper()
     quantity = data.get('quantity')
     price = data.get('price')
     trigger_price = data.get('trigger_price')
-    validity = data.get('validity', 'DAY')
+    validity = (data.get('validity') or 'DAY').strip().upper()
 
-    if not symbol or not side or not quantity:
+    if not symbol or not side or quantity is None:
         return error_response("symbol, side, and quantity are required.", 400)
 
     if side not in ('BUY', 'SELL'):
@@ -1392,24 +1459,90 @@ def place_order():
     if order_type not in ('MARKET', 'LIMIT', 'SL', 'SL-M'):
         return error_response("Invalid order type.", 400)
 
+    try:
+        qty = float(quantity)
+        if qty <= 0:
+            return error_response("Quantity must be greater than zero.", 400)
+    except (ValueError, TypeError):
+        return error_response("Invalid quantity value.", 400)
+
+    limit_price = None
+    if price is not None:
+        try:
+            limit_price = float(price)
+            if limit_price <= 0:
+                return error_response("Price must be greater than zero.", 400)
+        except (ValueError, TypeError):
+            return error_response("Invalid price value.", 400)
+
+    # Determine reference price for execution/validation
     md = database.get_market_data(symbol)
-    current_price = md.get('last_price') if md else price
+    market_price = float(md.get('last_price')) if (md and md.get('last_price')) else None
+    if not market_price:
+        market_price = trading_engine.get_current_price(symbol)
+
+    validation_price = market_price if order_type == 'MARKET' else (limit_price or market_price)
+    if not validation_price or validation_price <= 0:
+        return error_response(f"Could not determine valid price for {symbol}.", 400)
+
+    user_balance = database.get_user_balance(user_id)
+    if user_balance is None:
+        user_balance = 0.0
+
+    if side == 'BUY':
+        total_required = qty * validation_price
+        if user_balance < total_required:
+            return error_response(f"Insufficient funds. Required: ${total_required:,.2f}, Available: ${user_balance:,.2f}", 400)
+    elif side == 'SELL':
+        owned_shares = database.get_user_shares(user_id, symbol)
+        if owned_shares < qty:
+            return error_response(f"Insufficient shares. You only own {owned_shares} shares of {symbol}.", 400)
 
     order_id = database.create_order(
         user_id=user_id, symbol=symbol, side=side,
         order_type=order_type, product_type=product_type,
-        quantity=quantity, price=price,
+        quantity=qty, price=limit_price,
         trigger_price=trigger_price, validity=validity
     )
 
     # Auto-fill MARKET orders
-    if order_type == 'MARKET' and current_price:
-        database.fill_order(order_id, current_price)
-        try:
-            action = 'buy' if side == 'BUY' else 'sell'
-            database.add_transaction(user_id, symbol, action, float(quantity), float(current_price))
-        except Exception:
-            pass
+    if order_type == 'MARKET' and market_price > 0:
+        database.fill_order(order_id, market_price)
+        total_value = qty * market_price
+        action = 'BUY' if side == 'BUY' else 'SELL'
+        
+        # Log transaction with all 6 required arguments
+        database.add_transaction(user_id, symbol, action, qty, market_price, total_value)
+
+        # Update balance and portfolio
+        if side == 'BUY':
+            database.update_user_balance(user_id, user_balance - total_value)
+            existing_shares = database.get_user_shares(user_id, symbol)
+            portfolio = database.get_user_portfolio(user_id)
+            avg_price = market_price
+            total_invested = total_value
+            for holding in portfolio:
+                if holding['ticker'] == symbol:
+                    avg_price = (holding['total_invested'] + total_value) / (holding['shares'] + qty)
+                    total_invested = holding['total_invested'] + total_value
+                    break
+            database.update_portfolio_item(user_id, symbol, existing_shares + qty, avg_price, total_invested)
+        else: # SELL
+            database.update_user_balance(user_id, user_balance + total_value)
+            existing_shares = database.get_user_shares(user_id, symbol)
+            new_shares = existing_shares - qty
+            if new_shares <= 0:
+                database.delete_portfolio_item(user_id, symbol)
+            else:
+                portfolio = database.get_user_portfolio(user_id)
+                avg_price = market_price
+                total_invested = 0
+                for holding in portfolio:
+                    if holding['ticker'] == symbol:
+                        avg_price = holding['avg_buy_price']
+                        total_invested = max(0.0, holding['total_invested'] - (qty * avg_price))
+                        break
+                database.update_portfolio_item(user_id, symbol, new_shares, avg_price, total_invested)
 
     return jsonify({"status": "success", "order_id": order_id}), 201
 

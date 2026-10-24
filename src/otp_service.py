@@ -3,7 +3,7 @@
 Uses Gmail SMTP with App Password to send 6-digit OTP codes.
 """
 
-import random
+import secrets
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -12,8 +12,8 @@ from config import Config
 
 
 def generate_otp() -> str:
-    """Generate a random 6-digit OTP code."""
-    return str(random.randint(100000, 999999))
+    """Generate a cryptographically secure random 6-digit OTP code."""
+    return f"{secrets.randbelow(900000) + 100000}"
 
 
 def send_otp_email(recipient_email: str, otp_code: str) -> bool:

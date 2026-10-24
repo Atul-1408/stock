@@ -18,8 +18,47 @@ load_dotenv(BASE_DIR / ".env")
 class Config:
     """Main configuration class for the project."""
 
+    BASE_DIR = BASE_DIR
+
+    # Environment mode
+    ENVIRONMENT = os.getenv("FLASK_ENV", os.getenv("ENVIRONMENT", "development")).lower()
+    IS_PRODUCTION = ENVIRONMENT == "production"
+
+    # JWT Configuration
+    _raw_jwt_secret = os.getenv("JWT_SECRET_KEY", "").strip()
+    if _raw_jwt_secret:
+        JWT_SECRET_KEY = _raw_jwt_secret
+    elif IS_PRODUCTION:
+        raise RuntimeError("CRITICAL SECURITY ERROR: JWT_SECRET_KEY must be set in production environment.")
+    else:
+        import secrets
+        JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_hex(32))
+
+    JWT_ACCESS_TOKEN_EXPIRES_DAYS = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES_DAYS", "7"))
+
+    # CORS Allowed Origins
+    _default_cors = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+    ]
+    _env_cors = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    CORS_ALLOWED_ORIGINS = [orig.strip() for orig in _env_cors.split(",") if orig.strip()] if _env_cors else _default_cors
+
+    # Rate Limiting Storage URI
+    RATELIMIT_STORAGE_URI = os.getenv("RATELIMIT_STORAGE_URI", "memory://")
+
     # NewsAPI key should be set in .env as: NEWS_API_KEY=your_key_here
     NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
+
+    # Finnhub API key
+    FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+
+    # Telegram Bot
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
     # Gmail SMTP (for OTP emails)
     GMAIL_SENDER = os.getenv("GMAIL_SENDER", "")

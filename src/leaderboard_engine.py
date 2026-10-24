@@ -54,4 +54,4 @@ def get_user_rank(user_id, period='all_time'):
 
 def get_social_feed(limit=50):
     """Get recent shared trades with user details"""
-    return get_shared_trades_feed(limit)
+    return database.get_shared_trades_feed(limit)

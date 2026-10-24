@@ -2,18 +2,23 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import sys
+from pathlib import Path
 from flask import jsonify
+
+from config import Config
 
 def setup_logging(app):
     """Configure application logging for production"""
-    if not os.path.exists('logs'):
-        os.makedirs('logs')
+    log_dir = Path(Config.BASE_DIR) / 'logs'
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / 'stock_sense.log'
     
     # File handler - 10MB limit per file, keep 10 backups
     file_handler = RotatingFileHandler(
-        'logs/stock_sense.log',
+        str(log_file),
         maxBytes=10485760, 
-        backupCount=10
+        backupCount=10,
+        encoding='utf-8'
     )
     file_handler.setFormatter(logging.Formatter(
         '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
@@ -35,10 +40,11 @@ def register_error_handlers(app):
     
     @app.errorhandler(400)
     def bad_request(error):
+        msg = getattr(error, 'description', 'Bad Request')
         return jsonify({
             'status': 'error',
             'error': 'Bad Request',
-            'message': str(error)
+            'message': str(msg)
         }), 400
     
     @app.errorhandler(401)
@@ -46,7 +52,7 @@ def register_error_handlers(app):
         return jsonify({
             'status': 'error',
             'error': 'Unauthorized',
-            'message': 'Authentication failed'
+            'message': 'Authentication failed or missing credentials.'
         }), 401
     
     @app.errorhandler(403)
@@ -54,7 +60,7 @@ def register_error_handlers(app):
         return jsonify({
             'status': 'error',
             'error': 'Forbidden',
-            'message': 'Perspective denied'
+            'message': 'Access denied.'
         }), 403
     
     @app.errorhandler(404)
@@ -62,7 +68,7 @@ def register_error_handlers(app):
         return jsonify({
             'status': 'error',
             'error': 'Not Found',
-            'message': 'Intelligence resource not located'
+            'message': 'Requested resource not found.'
         }), 404
         
     @app.errorhandler(429)
@@ -70,7 +76,7 @@ def register_error_handlers(app):
         return jsonify({
             "status": "error",
             "error": "Too Many Requests",
-            "message": "Rate limit exceeded. Slow down your intelligence requests."
+            "message": "Rate limit exceeded. Please wait before submitting more requests."
         }), 429
     
     @app.errorhandler(500)
@@ -79,5 +85,5 @@ def register_error_handlers(app):
         return jsonify({
             'status': 'error',
             'error': 'Internal Server Error',
-            'message': 'An unexpected intelligence collapse occurred'
+            'message': 'An unexpected internal server error occurred.'
         }), 500

@@ -30,8 +30,14 @@ api.interceptors.response.use(
     (response) => response,
     (error) => {
         if (error.response && (error.response.status === 401 || error.response.status === 422)) {
-            localStorage.removeItem('token');
-            window.location.href = '/login';
+            const url = error.config?.url || '';
+            const isAuthRoute = url.includes('/auth/login') || url.includes('/auth/otp') || url.includes('/auth/google') || url.includes('/auth/signup');
+            const isAuthPage = typeof window !== 'undefined' && (window.location.pathname === '/login' || window.location.pathname === '/signup');
+            
+            if (!isAuthRoute && !isAuthPage) {
+                localStorage.removeItem('token');
+                window.location.href = '/login';
+            }
         }
         return Promise.reject(error);
     }

@@ -930,6 +930,10 @@ def get_user_portfolio(user_id: int) -> List[Dict]:
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
+def get_portfolio(user_id: int) -> List[Dict]:
+    """Alias for get_user_portfolio."""
+    return get_user_portfolio(user_id)
+
 def get_user_shares(user_id: int, ticker: str) -> float:
     """Get number of shares a user holds for a ticker."""
     with get_connection() as conn:

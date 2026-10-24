@@ -1,10 +1,25 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 venv/
-.env
+.venv/
 data/*.db
+*.db
+*.db-journal
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+
+# Logs
+*.log
+logs/
+src/logs/
 
 # Node
 node_modules/
