@@ -1,23 +1,4 @@
-﻿[Insert System Architecture Diagram Here]
-
-Figure 1: System Architecture Overview
-
-┌─────────────────────────────────────────────────────────────────────┐
-│                        FRONTEND LAYER                               │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐    │
-│  │   Dashboard     │  │   Trading       │  │   Analytics     │    │
-│  │   Component     │  │   Component     │  │   Component     │    │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘    │
-│        │                       │                      │           │
-│        │                       │                      │           │
-│        └───────────────────────┼──────────────────────┘           │
-│                                │                                  │
-└────────────────────────────────┼──────────────────────────────────┘
-                                 │
-┌────────────────────────────────┼──────────────────────────────────┐
-│                        APPLICATION LAYER                          │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐    │
-│  │"""Main pipeline script for Phase 2.
+"""Main pipeline script for news, sentiment, and price ingestion.
 
 Flow:
 1) Fetch latest news headlines for a ticker
@@ -27,6 +8,11 @@ Flow:
 """
 
 import argparse
+import sys
+from pathlib import Path
+
+# Ensure local imports resolve when executed directly
+sys.path.append(str(Path(__file__).parent))
 
 from config import Config
 from database import (
@@ -38,7 +24,7 @@ from database import (
 )
 from news_fetcher import fetch_news_for_ticker
 from price_fetcher import fetch_last_30_days_prices
-from sentiment_analyzer import SentimentAnalyzer
+from sentiment_service import SentimentAnalyzer
 
 
 def run_pipeline(ticker: str) -> None:

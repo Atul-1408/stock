@@ -23,87 +23,52 @@ def get_current_price(ticker: str) -> float:
 
 def execute_trade(user_id: int, ticker: str, action: str, shares: float, sentiment_score=None, sentiment_label=None):
     """
-    Executes a paper trade with balance and portfolio validation.
+    Executes a paper trade with atomic balance and portfolio validation.
     Returns: {'success': bool, 'data': dict, 'message': str}
     """
-    ticker = ticker.upper()
-    action = action.upper()
-    
-    if shares <= 0:
+    import math
+    from database import execute_trade_atomic
+
+    ticker = ticker.strip().upper()
+    action = action.strip().upper()
+
+    try:
+        shares = float(shares)
+    except (ValueError, TypeError):
+        return {"success": False, "message": "Shares must be a valid number."}
+
+    if not math.isfinite(shares) or math.isnan(shares) or math.isinf(shares) or shares <= 0:
         return {"success": False, "message": "Shares must be greater than zero."}
 
     price = get_current_price(ticker)
     if price <= 0:
         return {"success": False, "message": f"Could not fetch current price for {ticker}."}
 
-    total_value = shares * price
-    current_balance = get_user_balance(user_id)
+    result = execute_trade_atomic(
+        user_id=user_id,
+        symbol=ticker,
+        side=action,
+        quantity=shares,
+        execution_price=price,
+        order_type='MARKET',
+        product_type='CNC',
+        sentiment_score=sentiment_score,
+        sentiment_label=sentiment_label
+    )
 
-    if action == 'BUY':
-        if current_balance < total_value:
-            return {"success": False, "message": "Insufficient balance for this trade."}
-        
-        # Update Balance
-        new_balance = current_balance - total_value
-        update_user_balance(user_id, new_balance)
-        
-        # Update Portfolio
-        existing_shares = get_user_shares(user_id, ticker)
-        portfolio = get_user_portfolio(user_id)
-        
-        # Find existing holding to update average price
-        avg_price = price
-        total_invested = total_value
-        
-        for holding in portfolio:
-            if holding['ticker'] == ticker:
-                avg_price = (holding['total_invested'] + total_value) / (holding['shares'] + shares)
-                total_invested = holding['total_invested'] + total_value
-                break
-        
-        update_portfolio_item(user_id, ticker, existing_shares + shares, avg_price, total_invested)
-        
-    elif action == 'SELL':
-        existing_shares = get_user_shares(user_id, ticker)
-        if existing_shares < shares:
-            return {"success": False, "message": f"Insufficient shares. You only own {existing_shares} shares of {ticker}."}
-        
-        # Update Balance
-        new_balance = current_balance + total_value
-        update_user_balance(user_id, new_balance)
-        
-        # Update Portfolio
-        new_shares = existing_shares - shares
-        if new_shares == 0:
-            delete_portfolio_item(user_id, ticker)
-        else:
-            # When selling, average buy price stays the same, but total invested decreases proportionally
-            portfolio = get_user_portfolio(user_id)
-            avg_price = price # default fallback
-            total_invested = 0
-            for holding in portfolio:
-                if holding['ticker'] == ticker:
-                    avg_price = holding['avg_buy_price']
-                    total_invested = holding['total_invested'] - (shares * avg_price)
-                    break
-            update_portfolio_item(user_id, ticker, new_shares, avg_price, total_invested)
+    if not result.get("success"):
+        return {"success": False, "message": result.get("message", "Trade execution failed.")}
 
-    else:
-        return {"success": False, "message": "Invalid action. Use BUY or SELL."}
-
-    # Log Transaction
-    add_transaction(user_id, ticker, action, shares, price, total_value, sentiment_score, sentiment_label)
-    
-    # Return updated portfolio and balance to prevent race conditions on the frontend
     updated_portfolio = get_portfolio_summary(user_id)
-    final_balance = get_user_balance(user_id)
+    final_balance = result.get('new_balance')
 
     return {
         "success": True, 
         "message": f"Successfully {action.lower()}ed {shares} shares of {ticker}.",
         "data": {
             "portfolio": updated_portfolio,
-            "balance": final_balance
+            "balance": final_balance,
+            "order_id": result.get("order_id")
         }
     }
 

@@ -7,6 +7,10 @@ venv/
 data/*.db
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
+*.lock
+data/backups/
 
 # Environment and secrets
 .env

@@ -111,36 +111,24 @@ _currency_rates_cache = {
 }
 
 # ==========================================
-# TRADING BOT INTEGRATION
+# WORKER LIFECYCLE & BACKGROUND SERVICES
 # ==========================================
-def start_bot():
-    """Starts the trading bot in a background thread."""
+from worker_manager import worker_manager
+import order_validator
+from order_validator import duplicate_detector, is_price_recent, validate_order_input
+
+# Start background workers if appropriate (handles single-instance leader locking)
+if os.getenv("FLASK_ENV") != "testing" and os.getenv("ENABLE_BACKGROUND_WORKERS", "true").lower() == "true":
     try:
-        bot.init_trading_system()
-        bot.run_bot_engine()
+        worker_manager.start_all(app)
     except Exception as e:
-        app.logger.error(f"Bot Startup Error: {str(e).encode('ascii', 'ignore').decode()}")
+        app.logger.warning(f"Background worker startup skipped/deferred: {e}")
 
-# Initialize Database first
-database.init_db()
+class _BotThreadCompat:
+    def is_alive(self):
+        return worker_manager.is_running("trading_bot")
 
-# Start bot thread
-bot_thread = threading.Thread(target=start_bot, daemon=True)
-bot_thread.start()
-
-# Start market data feed
-try:
-    from market_data_feed import market_feed
-    market_feed.start()
-except Exception as e:
-    print(f"Market feed start error: {e}")
-
-# Start currency converter with auto-update
-try:
-    from currency_converter import currency_converter
-    currency_converter.start_auto_update()
-except Exception as e:
-    print(f"Currency converter start error: {e}")
+bot_thread = _BotThreadCompat()
 
 def error_response(message: str, status_code: int = 400):
     """Return a standardized JSON error response."""
@@ -316,7 +304,20 @@ def get_ticker_tape():
 
 @app.route("/health", methods=["GET"])
 def health() -> tuple:
-    return jsonify({"status": "ok", "service": "stock-sentiment-api", "bot_active": bot_thread.is_alive()}), 200
+    hw = worker_manager.get_health_status()
+    return jsonify({
+        "status": "ok",
+        "service": "stock-sentiment-api",
+        "bot_active": worker_manager.is_running("trading_bot"),
+        "worker_leader": hw.get("is_leader", False),
+        "workers": hw.get("workers", {})
+    }), 200
+
+
+@app.route("/api/workers/health", methods=["GET"])
+def workers_health():
+    """Detailed health check for all background workers."""
+    return jsonify(worker_manager.get_health_status()), 200
 
 
 # ==========================================
@@ -1441,62 +1442,67 @@ def place_order():
     user_id = int(get_jwt_identity())
     data = request.json or {}
 
-    symbol = (data.get('symbol') or '').strip().upper()
-    side = (data.get('side') or '').strip().upper()
-    order_type = (data.get('order_type') or 'MARKET').strip().upper()
-    product_type = (data.get('product_type') or 'CNC').strip().upper()
-    quantity = data.get('quantity')
-    price = data.get('price')
-    trigger_price = data.get('trigger_price')
-    validity = (data.get('validity') or 'DAY').strip().upper()
+    is_valid, err_msg, sanitized = validate_order_input(data)
+    if not is_valid:
+        return error_response(err_msg, 400)
 
-    if not symbol or not side or quantity is None:
-        return error_response("symbol, side, and quantity are required.", 400)
+    symbol = sanitized['symbol']
+    side = sanitized['side']
+    order_type = sanitized['order_type']
+    product_type = sanitized['product_type']
+    qty = sanitized['quantity']
+    limit_price = sanitized['price']
+    trigger_price = sanitized['trigger_price']
+    validity = sanitized['validity']
 
-    if side not in ('BUY', 'SELL'):
-        return error_response("side must be BUY or SELL.", 400)
-
-    if order_type not in ('MARKET', 'LIMIT', 'SL', 'SL-M'):
-        return error_response("Invalid order type.", 400)
-
-    try:
-        qty = float(quantity)
-        if qty <= 0:
-            return error_response("Quantity must be greater than zero.", 400)
-    except (ValueError, TypeError):
-        return error_response("Invalid quantity value.", 400)
-
-    limit_price = None
-    if price is not None:
-        try:
-            limit_price = float(price)
-            if limit_price <= 0:
-                return error_response("Price must be greater than zero.", 400)
-        except (ValueError, TypeError):
-            return error_response("Invalid price value.", 400)
+    # Prevent rapid duplicate submissions
+    if duplicate_detector.is_duplicate(user_id, symbol, side, qty, limit_price):
+        return error_response("Duplicate order detected. Please wait a moment before resubmitting.", 409)
 
     # Determine reference price for execution/validation
     md = database.get_market_data(symbol)
     market_price = float(md.get('last_price')) if (md and md.get('last_price')) else None
-    if not market_price:
+    if not market_price or market_price <= 0:
         market_price = trading_engine.get_current_price(symbol)
 
     validation_price = market_price if order_type == 'MARKET' else (limit_price or market_price)
     if not validation_price or validation_price <= 0:
         return error_response(f"Could not determine valid price for {symbol}.", 400)
 
-    user_balance = database.get_user_balance(user_id)
-    if user_balance is None:
-        user_balance = 0.0
+    # Auto-fill MARKET orders atomically
+    if order_type == 'MARKET':
+        result = database.execute_trade_atomic(
+            user_id=user_id,
+            symbol=symbol,
+            side=side,
+            quantity=qty,
+            execution_price=market_price,
+            order_type=order_type,
+            product_type=product_type
+        )
+        if not result.get("success"):
+            return error_response(result.get("message", "Order execution failed."), 400)
 
+        return jsonify({
+            "status": "success",
+            "order_id": result["order_id"],
+            "data": result
+        }), 201
+
+    # Handle pending non-market orders (LIMIT / SL / SL-M)
+    user_balance = database.get_user_balance(user_id) or 0.0
     if side == 'BUY':
         total_required = qty * validation_price
         if user_balance < total_required:
-            return error_response(f"Insufficient funds. Required: ${total_required:,.2f}, Available: ${user_balance:,.2f}", 400)
+            return error_response(
+                f"Insufficient funds. Required: ${total_required:,.2f}, Available: ${user_balance:,.2f}", 400
+            )
     elif side == 'SELL':
         owned_shares = database.get_user_shares(user_id, symbol)
         if owned_shares < qty:
-            return error_response(f"Insufficient shares. You only own {owned_shares} shares of {symbol}.", 400)
+            return error_response(
+                f"Insufficient shares. You only own {owned_shares} shares of {symbol}.", 400
+            )
 
     order_id = database.create_order(
         user_id=user_id, symbol=symbol, side=side,
@@ -1504,45 +1510,6 @@ def place_order():
         quantity=qty, price=limit_price,
         trigger_price=trigger_price, validity=validity
     )
-
-    # Auto-fill MARKET orders
-    if order_type == 'MARKET' and market_price > 0:
-        database.fill_order(order_id, market_price)
-        total_value = qty * market_price
-        action = 'BUY' if side == 'BUY' else 'SELL'
-        
-        # Log transaction with all 6 required arguments
-        database.add_transaction(user_id, symbol, action, qty, market_price, total_value)
-
-        # Update balance and portfolio
-        if side == 'BUY':
-            database.update_user_balance(user_id, user_balance - total_value)
-            existing_shares = database.get_user_shares(user_id, symbol)
-            portfolio = database.get_user_portfolio(user_id)
-            avg_price = market_price
-            total_invested = total_value
-            for holding in portfolio:
-                if holding['ticker'] == symbol:
-                    avg_price = (holding['total_invested'] + total_value) / (holding['shares'] + qty)
-                    total_invested = holding['total_invested'] + total_value
-                    break
-            database.update_portfolio_item(user_id, symbol, existing_shares + qty, avg_price, total_invested)
-        else: # SELL
-            database.update_user_balance(user_id, user_balance + total_value)
-            existing_shares = database.get_user_shares(user_id, symbol)
-            new_shares = existing_shares - qty
-            if new_shares <= 0:
-                database.delete_portfolio_item(user_id, symbol)
-            else:
-                portfolio = database.get_user_portfolio(user_id)
-                avg_price = market_price
-                total_invested = 0
-                for holding in portfolio:
-                    if holding['ticker'] == symbol:
-                        avg_price = holding['avg_buy_price']
-                        total_invested = max(0.0, holding['total_invested'] - (qty * avg_price))
-                        break
-                database.update_portfolio_item(user_id, symbol, new_shares, avg_price, total_invested)
 
     return jsonify({"status": "success", "order_id": order_id}), 201
 
@@ -1621,5 +1588,5 @@ def serve(path):
     return send_from_directory(app.static_folder, "index.html")
 
 if __name__ == "__main__":
-    alert_engine.alert_engine.start()
+    worker_manager.start_all(app)
     app.run(host="0.0.0.0", port=5000, debug=False)

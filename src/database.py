@@ -13,12 +13,16 @@ from config import Config
 
 
 def get_connection() -> sqlite3.Connection:
-    """Return a SQLite connection with dict-like row access."""
+    """Return a SQLite connection with dict-like row access and hardened concurrency settings."""
     db_file = Path(Config.DB_PATH)
     db_file.parent.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(db_file)
+    connection = sqlite3.connect(db_file, timeout=10.0)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON;")
+    connection.execute("PRAGMA journal_mode = WAL;")
+    connection.execute("PRAGMA busy_timeout = 5000;")
+    connection.execute("PRAGMA synchronous = NORMAL;")
     return connection
 
 
@@ -575,17 +579,26 @@ def init_db() -> None:
 
         # Performance Indexes (must come AFTER all table definitions)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user_ticker ON transactions(user_id, ticker)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_ticker ON portfolio(ticker)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_portfolio_user_ticker ON portfolio(user_id, ticker)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_conversations_user ON chat_conversations(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conversation_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_otp_codes_email ON otp_codes(email)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_otp_codes_email_used ON otp_codes(email, used)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_stock_universe_symbol ON stock_universe(symbol)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_stock_universe_exchange ON stock_universe(exchange)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_stock_universe_sector ON stock_universe(sector)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_data_symbol ON market_data_cache(symbol)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_user_status ON orders(user_id, status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_symbol ON orders(symbol)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_alert_rules_user_active ON alert_rules(user_id, is_active)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_alert_logs_user ON alert_logs(user_id, was_read)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_prices_ticker_date ON prices(ticker, trade_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shared_trades_user ON shared_trades(user_id, is_public)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_exchange_rates_pair ON exchange_rates(from_currency, to_currency)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_currency ON users(preferred_currency)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_bot_trades_user ON bot_trades(user_id)")
@@ -1652,6 +1665,164 @@ def fill_order(order_id: int, filled_price: float) -> None:
             (filled_price, now, order_id)
         )
         conn.commit()
+
+
+def execute_trade_atomic(
+    user_id: int,
+    symbol: str,
+    side: str,
+    quantity: float,
+    execution_price: float,
+    order_type: str = 'MARKET',
+    product_type: str = 'CNC',
+    sentiment_score: Optional[float] = None,
+    sentiment_label: Optional[str] = None
+) -> Dict:
+    """
+    Executes a complete trade within a single atomic database transaction.
+    Guarantees consistency across users balance, portfolio holdings, orders, and transaction audit logs.
+    """
+    symbol = symbol.strip().upper()
+    side = side.strip().upper()
+    quantity = float(quantity)
+    execution_price = float(execution_price)
+    total_value = round(quantity * execution_price, 4)
+    now = datetime.now(timezone.utc).isoformat()
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        # Immediate exclusive write lock for this transaction
+        cursor.execute("BEGIN IMMEDIATE")
+
+        # 1. Fetch user balance
+        cursor.execute("SELECT current_balance FROM users WHERE id = ?", (user_id,))
+        user_row = cursor.fetchone()
+        if not user_row:
+            conn.rollback()
+            return {"success": False, "message": "User not found."}
+        current_balance = float(user_row['current_balance'])
+
+        # 2. Fetch current holding
+        cursor.execute(
+            "SELECT shares, avg_buy_price, total_invested FROM portfolio WHERE user_id = ? AND ticker = ?",
+            (user_id, symbol)
+        )
+        holding_row = cursor.fetchone()
+        existing_shares = float(holding_row['shares']) if holding_row else 0.0
+        existing_total_invested = float(holding_row['total_invested']) if holding_row else 0.0
+
+        if side == 'BUY':
+            if current_balance < total_value:
+                conn.rollback()
+                return {
+                    "success": False,
+                    "message": f"Insufficient funds. Required: ${total_value:,.2f}, Available: ${current_balance:,.2f}"
+                }
+
+            new_balance = round(current_balance - total_value, 4)
+            cursor.execute("UPDATE users SET current_balance = ? WHERE id = ?", (new_balance, user_id))
+
+            new_shares = existing_shares + quantity
+            new_total_invested = existing_total_invested + total_value
+            new_avg_price = round(new_total_invested / new_shares, 4) if new_shares > 0 else execution_price
+
+            cursor.execute(
+                """
+                INSERT INTO portfolio (user_id, ticker, shares, avg_buy_price, total_invested, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, ticker) DO UPDATE SET
+                    shares = excluded.shares,
+                    avg_buy_price = excluded.avg_buy_price,
+                    total_invested = excluded.total_invested,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, symbol, new_shares, new_avg_price, new_total_invested, now, now)
+            )
+        elif side == 'SELL':
+            if existing_shares < quantity:
+                conn.rollback()
+                return {
+                    "success": False,
+                    "message": f"Insufficient shares. You only own {existing_shares} shares of {symbol}."
+                }
+
+            new_balance = round(current_balance + total_value, 4)
+            cursor.execute("UPDATE users SET current_balance = ? WHERE id = ?", (new_balance, user_id))
+
+            new_shares = existing_shares - quantity
+            if new_shares <= 0.000001:
+                cursor.execute("DELETE FROM portfolio WHERE user_id = ? AND ticker = ?", (user_id, symbol))
+                new_shares = 0.0
+            else:
+                avg_buy_price = float(holding_row['avg_buy_price']) if holding_row else execution_price
+                new_total_invested = max(0.0, existing_total_invested - (quantity * avg_buy_price))
+                cursor.execute(
+                    "UPDATE portfolio SET shares = ?, total_invested = ?, updated_at = ? WHERE user_id = ? AND ticker = ?",
+                    (new_shares, new_total_invested, now, user_id, symbol)
+                )
+        else:
+            conn.rollback()
+            return {"success": False, "message": "Invalid side. Must be BUY or SELL."}
+
+        # 3. Create and fill order record
+        cursor.execute(
+            """
+            INSERT INTO orders (user_id, symbol, side, order_type, product_type, quantity, price, trigger_price, validity, status, filled_quantity, filled_price, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'DAY', 'FILLED', ?, ?, ?, ?)
+            """,
+            (user_id, symbol, side, order_type, product_type, quantity, execution_price, quantity, execution_price, now, now)
+        )
+        order_id = cursor.lastrowid
+
+        # 4. Record transaction in audit log
+        cursor.execute(
+            """
+            INSERT INTO transactions (user_id, ticker, action, shares, price_per_share, total_value, sentiment_score, sentiment_label, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, symbol, side, quantity, execution_price, total_value, sentiment_score, sentiment_label, now)
+        )
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "order_id": order_id,
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "filled_price": execution_price,
+            "total_value": total_value,
+            "new_balance": new_balance,
+            "remaining_shares": new_shares if side == 'SELL' else (existing_shares + quantity)
+        }
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def backup_database(destination_path: Optional[str] = None) -> str:
+    """Create an online hot backup of the SQLite database using SQLite backup API."""
+    db_file = Path(Config.DB_PATH)
+    if not destination_path:
+        backup_dir = db_file.parent / 'backups'
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        destination_path = str(backup_dir / f"backup_{timestamp}.db")
+
+    dest_path = Path(destination_path)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with get_connection() as src_conn:
+        dest_conn = sqlite3.connect(str(dest_path))
+        with dest_conn:
+            src_conn.backup(dest_conn)
+        dest_conn.close()
+
+    return str(dest_path)
 
 
 # --- Currency Helpers ---
