@@ -1,204 +1,247 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { ClipboardList, BarChart3, Briefcase, XCircle, RefreshCw } from 'lucide-react';
-import api from '../utils/api';
-import { useCurrency } from '../contexts/CurrencyContext';
-import { formatCurrency } from '../utils/currency';
-import { toast } from 'react-toastify';
+import React, { useState, useEffect, useCallback } from "react";
+import { ClipboardList, BarChart3, XCircle, RefreshCw, AlertTriangle } from "lucide-react";
+import api from "../utils/api";
+import { useCurrency } from "../contexts/CurrencyContext";
+import { formatCurrency } from "../utils/currency";
+import { toast } from "react-toastify";
 
-const OrdersPositions = () => {
-    const { currency } = useCurrency();
-    const [activeTab, setActiveTab] = useState('orders');
-    const [orders, setOrders] = useState([]);
-    const [positions, setPositions] = useState([]);
-    const [totalPnl, setTotalPnl] = useState(0);
-    const [loading, setLoading] = useState(false);
+export default function OrdersPositions() {
+  const { currency } = useCurrency();
+  const [activeTab, setActiveTab] = useState("orders");
+  const [orders, setOrders] = useState([]);
+  const [positions, setPositions] = useState([]);
+  const [totalPnl, setTotalPnl] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [cancellingId, setCancellingId] = useState(null);
 
-    const fetchOrders = useCallback(async () => {
-        try {
-            const { data } = await api.get('/orders/list');
-            setOrders(data.orders || []);
-        } catch (err) {
-            console.error('Error fetching orders:', err);
-        }
-    }, []);
+  const fetchOrders = useCallback(async () => {
+    try {
+      setLoading(true);
+      const { data } = await api.get("/orders/list");
+      setOrders(data.orders || []);
+    } catch (err) {
+      console.error("Error fetching orders:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-    const fetchPositions = useCallback(async () => {
-        try {
-            const { data } = await api.get('/positions');
-            setPositions(data.positions || []);
-            setTotalPnl(data.total_pnl || 0);
-        } catch (err) {
-            console.error('Error fetching positions:', err);
-        }
-    }, []);
+  const fetchPositions = useCallback(async () => {
+    try {
+      setLoading(true);
+      const { data } = await api.get("/positions");
+      setPositions(data.positions || []);
+      setTotalPnl(data.total_pnl || 0);
+    } catch (err) {
+      console.error("Error fetching positions:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-    useEffect(() => {
-        if (activeTab === 'orders') fetchOrders();
-        else if (activeTab === 'positions') fetchPositions();
-    }, [activeTab, fetchOrders, fetchPositions]);
+  useEffect(() => {
+    if (activeTab === "orders") fetchOrders();
+    else if (activeTab === "positions") fetchPositions();
+  }, [activeTab, fetchOrders, fetchPositions]);
 
-    const cancelOrder = async (orderId) => {
-        try {
-            await api.delete(`/orders/${orderId}/cancel`);
-            toast.success('Order cancelled');
-            fetchOrders();
-        } catch (err) {
-            toast.error('Failed to cancel order');
-        }
-    };
+  const cancelOrder = async (orderId) => {
+    if (!window.confirm(`Are you sure you want to cancel order #${orderId}?`)) {
+      return;
+    }
+    try {
+      setCancellingId(orderId);
+      await api.delete(`/orders/${orderId}/cancel`);
+      toast.success("Order cancelled");
+      fetchOrders();
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Failed to cancel order");
+    } finally {
+      setCancellingId(null);
+    }
+  };
 
-    const tabs = [
-        { id: 'orders', label: 'Orders', icon: <ClipboardList className="w-4 h-4" />, count: orders.length },
-        { id: 'positions', label: 'Positions', icon: <BarChart3 className="w-4 h-4" />, count: positions.length },
-    ];
+  return (
+    <div className="terminal-card overflow-hidden font-mono text-xs">
+      {/* Tab Navigation Header */}
+      <div className="flex items-center justify-between border-b border-white/10 px-3 bg-[#080d16]">
+        <div className="flex items-center">
+          <button
+            onClick={() => setActiveTab("orders")}
+            className={`flex items-center gap-2 px-4 py-3 font-bold border-b-2 transition-all ${
+              activeTab === "orders"
+                ? "text-cyan-400 border-cyan-400 bg-white/5"
+                : "text-slate-400 border-transparent hover:text-white"
+            }`}
+          >
+            <ClipboardList size={14} />
+            <span>ORDERS</span>
+            <span className="px-1.5 py-0.2 rounded text-[10px] bg-white/10 text-slate-300">
+              {orders.length}
+            </span>
+          </button>
 
-    return (
-        <div className="bg-white/5 dark:bg-slate-800/30 backdrop-blur-sm border border-white/10 rounded-2xl overflow-hidden">
-            {/* Tab Headers */}
-            <div className="flex items-center border-b border-white/10">
-                {tabs.map(tab => (
-                    <button
-                        key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
-                        className={`flex items-center gap-2 px-5 py-3 text-sm font-bold transition-all border-b-2 ${activeTab === tab.id
-                            ? 'text-blue-400 border-blue-500'
-                            : 'text-gray-400 border-transparent hover:text-gray-200'
-                            }`}
-                    >
-                        {tab.icon}
-                        {tab.label}
-                        {tab.count > 0 && (
-                            <span className="ml-1 px-1.5 py-0.5 bg-white/10 rounded-md text-[10px]">{tab.count}</span>
-                        )}
-                    </button>
-                ))}
-
-                <div className="ml-auto pr-3">
-                    <button
-                        onClick={() => activeTab === 'orders' ? fetchOrders() : fetchPositions()}
-                        className="p-1.5 hover:bg-white/10 rounded-lg transition-colors"
-                    >
-                        <RefreshCw className="w-4 h-4 text-gray-400" />
-                    </button>
-                </div>
-            </div>
-
-            {/* Orders Tab */}
-            {activeTab === 'orders' && (
-                <div className="overflow-x-auto">
-                    {orders.length === 0 ? (
-                        <div className="text-center py-12 text-gray-400 text-sm">No orders yet. Place an order from the market watch.</div>
-                    ) : (
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="border-b border-white/5">
-                                    <th className="text-left py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Time</th>
-                                    <th className="text-left py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Symbol</th>
-                                    <th className="text-left py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Side</th>
-                                    <th className="text-left py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Type</th>
-                                    <th className="text-right py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Qty</th>
-                                    <th className="text-right py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Price</th>
-                                    <th className="text-center py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Status</th>
-                                    <th className="text-center py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {orders.map(order => (
-                                    <tr key={order.id} className="border-b border-white/5 hover:bg-white/5">
-                                        <td className="py-2.5 px-4 text-gray-400 text-xs">
-                                            {new Date(order.created_at).toLocaleTimeString()}
-                                        </td>
-                                        <td className="py-2.5 px-4">
-                                            <span className="px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded text-xs font-bold">
-                                                {order.symbol.replace('.NS', '')}
-                                            </span>
-                                        </td>
-                                        <td className="py-2.5 px-4">
-                                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${order.side === 'BUY' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                                                }`}>{order.side}</span>
-                                        </td>
-                                        <td className="py-2.5 px-4 text-gray-300 text-xs">{order.order_type} • {order.product_type}</td>
-                                        <td className="py-2.5 px-4 text-right text-white font-medium">{order.quantity}</td>
-                                        <td className="py-2.5 px-4 text-right text-white font-medium">
-                                            {order.filled_price ? formatCurrency(order.filled_price, currency) : order.price ? formatCurrency(order.price, currency) : 'MKT'}
-                                        </td>
-                                        <td className="py-2.5 px-4 text-center">
-                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${order.status === 'FILLED' ? 'bg-emerald-500/10 text-emerald-400' :
-                                                order.status === 'OPEN' ? 'bg-yellow-500/10 text-yellow-400' :
-                                                    order.status === 'CANCELLED' ? 'bg-gray-500/10 text-gray-400' :
-                                                        'bg-white/10 text-gray-400'
-                                                }`}>{order.status}</span>
-                                        </td>
-                                        <td className="py-2.5 px-4 text-center">
-                                            {order.status === 'OPEN' && (
-                                                <button
-                                                    onClick={() => cancelOrder(order.id)}
-                                                    className="p-1 hover:bg-red-500/10 text-red-400 rounded-lg transition-colors"
-                                                    title="Cancel Order"
-                                                >
-                                                    <XCircle className="w-4 h-4" />
-                                                </button>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    )}
-                </div>
-            )}
-
-            {/* Positions Tab */}
-            {activeTab === 'positions' && (
-                <div className="overflow-x-auto">
-                    {positions.length === 0 ? (
-                        <div className="text-center py-12 text-gray-400 text-sm">No open positions.</div>
-                    ) : (
-                        <>
-                            <table className="w-full text-sm">
-                                <thead>
-                                    <tr className="border-b border-white/5">
-                                        <th className="text-left py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Symbol</th>
-                                        <th className="text-right py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Qty</th>
-                                        <th className="text-right py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Avg Price</th>
-                                        <th className="text-right py-3 px-4 text-gray-400 text-xs font-semibold uppercase">LTP</th>
-                                        <th className="text-right py-3 px-4 text-gray-400 text-xs font-semibold uppercase">P&L</th>
-                                        <th className="text-right py-3 px-4 text-gray-400 text-xs font-semibold uppercase">Value</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {positions.map(pos => (
-                                        <tr key={pos.symbol} className="border-b border-white/5 hover:bg-white/5">
-                                            <td className="py-2.5 px-4">
-                                                <span className="px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded text-xs font-bold">
-                                                    {pos.symbol.replace('.NS', '')}
-                                                </span>
-                                            </td>
-                                            <td className="py-2.5 px-4 text-right text-white font-medium">{pos.quantity}</td>
-                                            <td className="py-2.5 px-4 text-right text-gray-300">{formatCurrency(pos.avg_price, currency)}</td>
-                                            <td className="py-2.5 px-4 text-right text-white font-bold">{formatCurrency(pos.ltp, currency)}</td>
-                                            <td className="py-2.5 px-4 text-right">
-                                                <span className={`font-bold ${pos.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                                                    {pos.pnl >= 0 ? '+' : ''}{pos.pnl.toFixed(2)} ({pos.pnl_pct.toFixed(2)}%)
-                                                </span>
-                                            </td>
-                                            <td className="py-2.5 px-4 text-right text-gray-300">{formatCurrency(pos.current_value, currency)}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                            <div className="flex justify-end px-4 py-3 border-t border-white/10">
-                                <span className="text-sm text-gray-400 mr-2">Total P&L:</span>
-                                <span className={`text-sm font-bold ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                                    {totalPnl >= 0 ? '+' : ''}{formatCurrency(Math.abs(totalPnl), currency)}
-                                </span>
-                            </div>
-                        </>
-                    )}
-                </div>
-            )}
+          <button
+            onClick={() => setActiveTab("positions")}
+            className={`flex items-center gap-2 px-4 py-3 font-bold border-b-2 transition-all ${
+              activeTab === "positions"
+                ? "text-cyan-400 border-cyan-400 bg-white/5"
+                : "text-slate-400 border-transparent hover:text-white"
+            }`}
+          >
+            <BarChart3 size={14} />
+            <span>POSITIONS</span>
+            <span className="px-1.5 py-0.2 rounded text-[10px] bg-white/10 text-slate-300">
+              {positions.length}
+            </span>
+          </button>
         </div>
-    );
-};
 
-export default OrdersPositions;
+        <div className="flex items-center gap-3">
+          {activeTab === "positions" && (
+            <div className="text-[11px] font-bold">
+              <span className="text-slate-500 mr-1.5">NET P&L:</span>
+              <span className={totalPnl >= 0 ? "text-emerald-400" : "text-coral-400"}>
+                {totalPnl >= 0 ? "+" : ""}${Number(totalPnl).toFixed(2)}
+              </span>
+            </div>
+          )}
+
+          <button
+            onClick={() => (activeTab === "orders" ? fetchOrders() : fetchPositions())}
+            disabled={loading}
+            className="p-1.5 text-slate-400 hover:text-white rounded hover:bg-white/5 transition-colors"
+            title="Refresh Ledger"
+          >
+            <RefreshCw size={13} className={loading ? "animate-spin text-cyan-400" : ""} />
+          </button>
+        </div>
+      </div>
+
+      {/* Tab 1: Orders Table */}
+      {activeTab === "orders" && (
+        <div className="overflow-x-auto">
+          {orders.length > 0 ? (
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-white/5 text-[10px] text-slate-400 uppercase bg-[#090e17]">
+                  <th className="py-2.5 px-3 font-semibold">TIME</th>
+                  <th className="py-2.5 px-3 font-semibold">SYMBOL</th>
+                  <th className="py-2.5 px-3 font-semibold">SIDE</th>
+                  <th className="py-2.5 px-3 font-semibold">TYPE</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">QTY</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">PRICE</th>
+                  <th className="py-2.5 px-3 font-semibold">STATUS</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">ACTION</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {orders.map((o) => {
+                  const isBuy = o.side === "BUY";
+                  const isFilled = o.status === "FILLED";
+                  const isOpen = o.status === "OPEN";
+                  const timeStr = o.created_at ? o.created_at.slice(11, 19) : "—";
+
+                  return (
+                    <tr key={o.id} className="hover:bg-white/5 transition-colors">
+                      <td className="py-2.5 px-3 text-slate-400 text-[11px]">{timeStr}</td>
+                      <td className="py-2.5 px-3 font-bold text-white">{o.symbol}</td>
+                      <td className="py-2.5 px-3">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            isBuy ? "bg-emerald-500/10 text-emerald-400" : "bg-coral-500/10 text-coral-400"
+                          }`}
+                        >
+                          {o.side}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-300 text-[11px]">{o.order_type}</td>
+                      <td className="py-2.5 px-3 text-right text-slate-200">{Number(o.quantity).toLocaleString()}</td>
+                      <td className="py-2.5 px-3 text-right text-slate-200">
+                        {o.price != null ? `$${Number(o.price).toFixed(2)}` : "MKT"}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            isFilled
+                              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                              : isOpen
+                              ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/20"
+                              : "bg-slate-500/10 text-slate-400 border border-slate-500/20"
+                          }`}
+                        >
+                          {o.status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        {isOpen ? (
+                          <button
+                            onClick={() => cancelOrder(o.id)}
+                            disabled={cancellingId === o.id}
+                            className="px-2 py-0.5 rounded bg-coral-500/10 text-coral-400 hover:bg-coral-500/20 text-[10px] font-bold border border-coral-500/20"
+                          >
+                            {cancellingId === o.id ? "..." : "CANCEL"}
+                          </button>
+                        ) : (
+                          <span className="text-slate-600 text-[10px]">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <div className="py-8 text-center text-slate-500">
+              NO ORDERS RECORDED IN CURRENT SESSION
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab 2: Positions Table */}
+      {activeTab === "positions" && (
+        <div className="overflow-x-auto">
+          {positions.length > 0 ? (
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-white/5 text-[10px] text-slate-400 uppercase bg-[#090e17]">
+                  <th className="py-2.5 px-3 font-semibold">SYMBOL</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">SHARES</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">AVG BUY</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">LTP</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">CURRENT VAL</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">P&L ($)</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">P&L (%)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {positions.map((p) => {
+                  const pnlUp = (p.pnl || 0) >= 0;
+                  return (
+                    <tr key={p.symbol} className="hover:bg-white/5 transition-colors">
+                      <td className="py-2.5 px-3 font-bold text-white">{p.symbol}</td>
+                      <td className="py-2.5 px-3 text-right text-slate-200">{Number(p.quantity).toLocaleString()}</td>
+                      <td className="py-2.5 px-3 text-right text-slate-300">${Number(p.avg_price).toFixed(2)}</td>
+                      <td className="py-2.5 px-3 text-right text-slate-300">${Number(p.ltp).toFixed(2)}</td>
+                      <td className="py-2.5 px-3 text-right text-white font-bold">${Number(p.current_value).toFixed(2)}</td>
+                      <td className={`py-2.5 px-3 text-right font-bold ${pnlUp ? "text-emerald-400" : "text-coral-400"}`}>
+                        {pnlUp ? "+" : ""}${Number(p.pnl || 0).toFixed(2)}
+                      </td>
+                      <td className={`py-2.5 px-3 text-right font-bold ${pnlUp ? "text-emerald-400" : "text-coral-400"}`}>
+                        {pnlUp ? "+" : ""}{Number(p.pnl_pct || 0).toFixed(2)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <div className="py-8 text-center text-slate-500">
+              NO OPEN POSITIONS HELD
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

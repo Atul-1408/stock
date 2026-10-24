@@ -70,8 +70,51 @@ class Config:
     # Gemini AI Key
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-    # SQLite database file path
-    DB_PATH = BASE_DIR / "data" / "stock_dashboard.db"
+    # Trading Safety Controls
+    # Defaults strictly to PAPER. Live trading requires TRADING_MODE=LIVE and ALLOW_LIVE_TRADING=true.
+    TRADING_MODE = os.getenv("TRADING_MODE", "PAPER").upper()
+    ALLOW_LIVE_TRADING = os.getenv("ALLOW_LIVE_TRADING", "false").lower() in ("true", "1", "yes")
+
+    if TRADING_MODE == "LIVE" and not ALLOW_LIVE_TRADING:
+        raise RuntimeError(
+            "CRITICAL SAFETY ERROR: TRADING_MODE is set to 'LIVE' but ALLOW_LIVE_TRADING is false. "
+            "Live trading requires explicit dual authorization via ALLOW_LIVE_TRADING=true."
+        )
+
+    IS_LIVE_TRADING_ENABLED = (TRADING_MODE == "LIVE" and ALLOW_LIVE_TRADING)
+
+    # SQLite database file path (supports container/persistent storage mounts via DATABASE_PATH or DB_PATH)
+    _db_path_env = os.getenv("DATABASE_PATH", os.getenv("DB_PATH", "")).strip()
+    DB_PATH = Path(_db_path_env) if _db_path_env else (BASE_DIR / "data" / "stock_dashboard.db")
+
+    @classmethod
+    def validate_production_config(cls):
+        """Validate production configuration before service launch."""
+        errors = []
+        warnings = []
+
+        if cls.IS_PRODUCTION:
+            if not cls.JWT_SECRET_KEY or len(cls.JWT_SECRET_KEY) < 32:
+                errors.append("JWT_SECRET_KEY must be at least 32 characters in production.")
+
+            if "*" in cls.CORS_ALLOWED_ORIGINS:
+                errors.append("Wildcard '*' in CORS_ALLOWED_ORIGINS is prohibited in production.")
+
+            if cls.IS_LIVE_TRADING_ENABLED:
+                warnings.append("LIVE TRADING IS ENABLED. Verify risk limits and brokerage credentials.")
+            else:
+                # Confirm paper trading
+                pass
+
+            if cls.RATELIMIT_STORAGE_URI == "memory://":
+                warnings.append(
+                    "RATELIMIT_STORAGE_URI is 'memory://'. Consider using Redis ('redis://...') in multi-worker production."
+                )
+
+        if errors:
+            raise RuntimeError(f"PRODUCTION CONFIGURATION VALIDATION FAILED: {'; '.join(errors)}")
+
+        return {"valid": True, "warnings": warnings}
 
     # Fetch settings
     NEWS_PAGE_SIZE = 20

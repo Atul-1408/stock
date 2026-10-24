@@ -24,14 +24,24 @@ class TradingChatbot:
         """
         Get AI response with trading context
         """
-        # Get user context
+        # Check for unsupported questions (tax, legal, guaranteed return requests)
+        unsupported_reply = self._handle_unsupported_query(user_message)
+        if unsupported_reply:
+            return {
+                'response': unsupported_reply,
+                'actions': [],
+                'stocks_mentioned': self._extract_tickers(user_message)
+            }
+
+        # Get user context and grounded market data for mentioned tickers
         user_context = self._get_user_context(user_id)
-        
-        # Build system prompt with user context
-        system_prompt = self._build_system_prompt(user_context)
+        mentioned_tickers = self._extract_tickers(user_message)
+        market_context = self._get_grounded_market_context(mentioned_tickers)
+
+        # Build grounded system prompt
+        system_prompt = self._build_system_prompt(user_context, market_context)
         
         # Build conversation for Gemini
-        # Gemini Client expects a list of content parts or a simple string
         full_content = f"{system_prompt}\n\n"
         
         # Add history (last 5 messages for context)
@@ -47,20 +57,19 @@ class TradingChatbot:
             if not self.client:
                  raise Exception("Gemini Client not initialized")
 
-            # Call Gemini API using new Client pattern
+            # Call Gemini API using Client pattern
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=full_content
             )
             
-            # Check for response and safely extract text
             if not response or not response.text:
                 raise Exception("Empty response from AI")
                 
             assistant_message = response.text
             
             # Extract mentioned stocks and actions
-            stocks_mentioned = self._extract_tickers(assistant_message)
+            stocks_mentioned = list(set(mentioned_tickers + self._extract_tickers(assistant_message)))
             suggested_actions = self._extract_actions(assistant_message)
             
             return {
@@ -69,22 +78,84 @@ class TradingChatbot:
                 'stocks_mentioned': stocks_mentioned
             }
         
-        except Exception as e:
-            print(f"Chatbot error: {e}")
-            # Fallback Analysis (Degraded Mode) - Made Polite
+        except Exception:
+            # Degraded Fallback Mode: Clean, secure, and helpful without leaking internal exception traces
             fallback_holdings = user_context.get('holdings', [])
-            holdings_str = ', '.join(fallback_holdings) if fallback_holdings else 'the market'
+            holdings_str = ', '.join(fallback_holdings) if fallback_holdings else 'your monitored universe'
+
+            fallback_text = (
+                f"Hello! I am currently operating in resilient offline mode. "
+                f"Based on available market intelligence for {holdings_str}, maintain disciplined risk management. "
+            )
+            if market_context:
+                fallback_text += f"\n\n**Grounded Market Feed:**\n{market_context}\n\n"
+            fallback_text += (
+                "Please verify active orders and signals on the Trading Desk. "
+                "How else may I assist your portfolio analysis?"
+            )
             
             return {
-                'response': f"I'm very sorry, but I'm having a little trouble connecting to my brain right now. Based on your portfolio in {holdings_str}, I would recommend being a bit cautious. (Technical note: {str(e)}). Could you please check the Alerts tab for sentiment signals in the meantime? I'll be here if you need anything else!",
+                'response': fallback_text,
                 'actions': [{'type': 'hold', 'confidence': 'medium'}],
-                'stocks_mentioned': self._extract_tickers(user_message)
+                'stocks_mentioned': mentioned_tickers
             }
     
-    def _build_system_prompt(self, user_context):
-        """Build system prompt with user context"""
-        
-        # Safe extraction with defaults
+    def _handle_unsupported_query(self, message: str) -> Optional[str]:
+        """Detect and gracefully handle questions outside financial analytics scope."""
+        if not message:
+            return None
+        low = message.lower()
+
+        # Guaranteed profit requests
+        if any(p in low for p in ["guaranteed return", "guarantee profit", "100% win", "can't lose", "risk free"]):
+            return (
+                "Market investments carry inherent capital risk, and no financial model or algorithm can guarantee "
+                "trading profits or risk-free returns. Past sentiment trends and technical indicators are informational "
+                "and should always be combined with strict position sizing and stop-loss rules."
+            )
+
+        # Tax or legal inquiries
+        if any(p in low for p in ["tax advice", "file my taxes", "legal advice", "tax deduction for trades", "tax loop"]):
+            return (
+                "I specialize in financial market analytics, technical indicators, and news sentiment. "
+                "I cannot provide tax, legal, or accounting advice. Please consult a qualified tax professional "
+                "or certified financial advisor for tax-related decisions."
+            )
+
+        return None
+
+    def _get_grounded_market_context(self, tickers: list) -> str:
+        """Fetch verified prices and sentiment to prevent hallucination of financial figures."""
+        if not tickers:
+            return ""
+
+        from trading_engine import get_current_price
+        from sentiment_service import get_sentiment
+
+        context_lines = []
+        for sym in tickers[:4]:
+            sym_clean = sym.upper().strip()
+            try:
+                price = get_current_price(sym_clean)
+                sent = get_sentiment(sym_clean)
+                price_str = f"${price:.2f}" if price and price > 0 else "Live price unavailable"
+                label = sent.get("label", "Neutral")
+                score = sent.get("score", 0.0)
+                n_articles = sent.get("sample_size", 0)
+
+                context_lines.append(
+                    f"- {sym_clean}: Current Price = {price_str} | Sentiment = {label} "
+                    f"(Score: {score:+.2f}, N={n_articles} articles analyzed)"
+                )
+            except Exception:
+                context_lines.append(f"- {sym_clean}: Market feed temporarily unavailable.")
+
+        if context_lines:
+            return "VERIFIED MARKET REALITY (DO NOT INVENT OR CONTRADICT THESE DATA POINTS):\n" + "\n".join(context_lines)
+        return ""
+
+    def _build_system_prompt(self, user_context, market_context=""):
+        """Build system prompt with user context and verified market reality."""
         p_val = user_context.get('portfolio_value', 0)
         cash = user_context.get('cash_balance', 100000)
         pnl = user_context.get('total_pnl', 0)
@@ -93,36 +164,30 @@ class TradingChatbot:
         holdings = user_context.get('holdings', [])
         holdings_str = ', '.join(holdings) if holdings else 'None'
         
-        return f"""You are a helpful, polite, and friendly AI trading assistant for Stock Sense. 
-Your goal is to provide excellent service and assist users with their trading decisions while maintaining a warm and professional demeanor.
+        return f"""You are a professional, polite, and helpful AI financial intelligence assistant for Sovereign Intelligence.
+Your purpose is to assist users with portfolio analytics, market sentiment synthesis, and risk assessment.
 
-PERSONALITY GUIDELINES:
-- **Be extremely polite and friendly.** Use greetings (e.g., "Hello!", "How can I help you today?") and polite closings.
-- Use phrases like "Please," "Thank you," "I'd be happy to help," and "I'm sorry" where appropriate.
-- Maintain a supportive and encouraging tone.
-- If a user loses money, be empathetic but professional.
+CORE SAFETY & FACTUALITY RULES:
+1. **NEVER FABRICATE PRICES, FINANCIAL METRICS, OR NEWS CITATIONS.** If price or fundamental data for a symbol is not provided in the verified context, explicitly state that live market data is unavailable.
+2. **NO GUARANTEED RETURNS:** Never promise or imply guaranteed profits or risk-free trades. Remind users that investments involve risk of loss.
+3. **NO AUTOMATIC EXECUTION:** Remind users that automated suggestions are informational and all trade orders must be reviewed and placed manually via the Trading Desk.
+4. **PRIVACY PROTECTION:** Never expose user account credentials, database IDs, or private personal data in answers.
+5. **OBJECTIVITY:** Maintain an objective, balanced tone. Do not make unsupported causal claims.
 
-CURRENT USER CONTEXT:
-- Portfolio Value: ${p_val:,.2f}
-- Available Cash: ${cash:,.2f}
-- Total P&L: ${pnl:,.2f} ({pnl_pct:.2f}%)
-- Win Rate: {win_rate:.1f}%
-- Current Holdings: {holdings_str}
+CURRENT ACCOUNT CONTEXT:
+- Paper Equity: ${p_val:,.2f}
+- Available Buying Power: ${cash:,.2f}
+- Realized/Unrealized P&L: ${pnl:,.2f} ({pnl_pct:.2f}%)
+- Monitored Holdings: {holdings_str}
+
+{market_context}
 
 CAPABILITIES:
-1. Analyze stock sentiment (FinBERT scores)
-2. Provide Buy/Sell/Hold recommendations
-3. Risk assessments (1-10 scale)
-4. Portfolio diversification advice
+- FinBERT & VADER sentiment interpretation
+- Technical trend and portfolio risk assessment
+- Strategy considerations (position sizing, stop-loss discipline)
 
-GUIDELINES:
-- Be concise and polite.
-- Use bullet points for readability.
-- Check sentiment before recommending a buy.
-- Warn about negative sentiment spikes kindly.
-- Never guarantee profits.
-
-Current date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}"""
+Current UTC Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}"""
     
     def _get_user_context(self, user_id):
         """Get user's portfolio context"""

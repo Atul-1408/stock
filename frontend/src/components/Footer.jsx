@@ -1,20 +1,20 @@
-import { Github, Globe } from "lucide-react";
+import React from "react";
 
 function Footer() {
-    return (
-        <footer className="mt-20 py-10 border-t border-slate-200/60 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-900/10 transition-colors duration-400">
-            <div className="max-w-7xl mx-auto px-4 md:px-8 flex flex-col items-center gap-6">
-                <div className="text-center">
-                    <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center justify-center gap-2">
-                        Stock Sentiment Dashboard
-                    </h2>
-                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                        Built for university final year project &bull; 2025
-                    </p>
-                </div>
-            </div>
-        </footer>
-    );
+  return (
+    <footer className="py-6 border-t border-terminal-800 bg-terminal-950/60 font-mono text-2xs text-slate-400">
+      <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-slate-200 uppercase">Sovereign Intelligence</span>
+          <span>&bull;</span>
+          <span>Institutional Financial Terminal</span>
+        </div>
+        <div>
+          Simulation & Execution Desk &bull; All real-time telemetry encrypted
+        </div>
+      </div>
+    </footer>
+  );
 }
 
 export default Footer;

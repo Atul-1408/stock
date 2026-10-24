@@ -1,181 +1,181 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { ShoppingCart, TrendingUp, TrendingDown, DollarSign, Activity, AlertCircle, CheckCircle2 } from 'lucide-react';
-import api from '../utils/api';
-import { useCurrency, getNativeCurrency } from '../contexts/CurrencyContext';
-import { formatCurrency } from '../utils/currency';
+import React, { useState, useEffect } from "react";
+import { ShoppingCart, DollarSign, AlertCircle, CheckCircle2 } from "lucide-react";
+import api from "../utils/api";
+import { useCurrency } from "../contexts/CurrencyContext";
+import { formatCurrency } from "../utils/currency";
 
-const TradingPanel = ({ ticker, sentimentScore, sentimentLabel, currentPrice, onTradeSuccess, balance }) => {
-    const { currency, convertPrice } = useCurrency();
-    const [shares, setShares] = useState(1);
-    const [action, setAction] = useState('BUY');
-    const [loading, setLoading] = useState(false);
-    const [message, setMessage] = useState({ type: '', text: '' });
+export default function TradingPanel({
+  ticker,
+  sentimentScore,
+  sentimentLabel,
+  currentPrice,
+  onTradeSuccess,
+  balance,
+}) {
+  const { currency } = useCurrency();
+  const [shares, setShares] = useState(1);
+  const [action, setAction] = useState("BUY");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState({ type: "", text: "" });
 
-    const totalCost = (shares * currentPrice).toFixed(2);
-    const canAfford = action === 'BUY' ? balance >= totalCost : true;
+  const numShares = Math.max(1, parseInt(shares, 10) || 1);
+  const unitPrice = parseFloat(currentPrice) || 0.0;
+  const totalCost = (numShares * unitPrice).toFixed(2);
+  const canAfford = action === "BUY" ? (balance || 0) >= parseFloat(totalCost) : true;
 
-    const handleTrade = async () => {
-        if (shares <= 0) return;
-        setLoading(true);
-        setMessage({ type: '', text: '' });
+  const handleTrade = async () => {
+    if (numShares <= 0 || unitPrice <= 0) return;
+    setLoading(true);
+    setMessage({ type: "", text: "" });
 
-        try {
-            const response = await api.post('/trade', {
-                ticker,
-                action,
-                shares: parseFloat(shares),
-                sentiment_score: sentimentScore,
-                sentiment_label: sentimentLabel
-            });
+    try {
+      const response = await api.post("/trade", {
+        ticker,
+        action,
+        shares: numShares,
+        sentiment_score: sentimentScore,
+        sentiment_label: sentimentLabel,
+      });
 
-            setMessage({ type: 'success', text: response.data.message });
-            if (onTradeSuccess) onTradeSuccess(response.data.data);
-            setShares(1);
-        } catch (err) {
-            setMessage({ type: 'error', text: err.response?.data?.message || 'Trade failed.' });
-        } finally {
-            setLoading(false);
-        }
-    };
+      setMessage({ type: "success", text: response.data.message });
+      if (onTradeSuccess) onTradeSuccess(response.data.data);
+      setShares(1);
+    } catch (err) {
+      setMessage({
+        type: "error",
+        text: err.response?.data?.message || "Trade execution failed.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    useEffect(() => {
-        if (message.text) {
-            const timer = setTimeout(() => setMessage({ type: '', text: '' }), 5000);
-            return () => clearTimeout(timer);
-        }
-    }, [message]);
+  useEffect(() => {
+    if (message.text) {
+      const timer = setTimeout(() => setMessage({ type: "", text: "" }), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
 
-    if (!ticker) return null;
+  if (!ticker) return null;
 
-    return (
-        <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="card p-6 border-slate-200/50 dark:border-slate-800/50 bg-white dark:bg-slate-900/40 backdrop-blur-md shadow-xl transition-colors duration-400"
+  return (
+    <div className="terminal-card p-4 font-mono space-y-3">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-white/5 pb-2">
+        <div className="flex items-center gap-2">
+          <ShoppingCart size={14} className="text-cyan-400" />
+          <span className="text-xs font-bold text-white tracking-wider">
+            QUICK EXECUTION // {ticker}
+          </span>
+        </div>
+        <span className="text-[10px] text-slate-400 font-semibold">
+          LTP: ${unitPrice.toFixed(2)}
+        </span>
+      </div>
+
+      {/* Action Toggle (BUY / SELL) */}
+      <div className="grid grid-cols-2 gap-1.5 p-1 bg-black/40 rounded-lg border border-white/5">
+        <button
+          type="button"
+          onClick={() => setAction("BUY")}
+          className={`py-1.5 rounded text-xs font-bold transition-all ${
+            action === "BUY"
+              ? "bg-emerald-500 text-black shadow-sm"
+              : "text-slate-400 hover:text-white"
+          }`}
         >
-            <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2 transition-colors">
-                    <ShoppingCart className="w-5 h-5 text-blue-500" />
-                    Trade {ticker}
-                </h3>
-                <div className="text-sm font-medium text-slate-500 dark:text-slate-400 flex items-center gap-2 transition-colors">
-                    <DollarSign className="w-4 h-4" />
-                    Balance: <span className="text-slate-900 dark:text-white font-bold transition-colors">{formatCurrency(balance, currency)}</span>
-                </div>
-            </div>
+          BUY (LONG)
+        </button>
+        <button
+          type="button"
+          onClick={() => setAction("SELL")}
+          className={`py-1.5 rounded text-xs font-bold transition-all ${
+            action === "SELL"
+              ? "bg-coral-500 text-white shadow-sm"
+              : "text-slate-400 hover:text-white"
+          }`}
+        >
+          SELL (SHORT)
+        </button>
+      </div>
 
-            <div className="flex p-1 bg-slate-100 dark:bg-slate-800/50 rounded-xl mb-6 transition-colors">
-                <button
-                    onClick={() => setAction('BUY')}
-                    className={`flex-1 py-2 rounded-lg font-bold transition-all ${action === 'BUY'
-                        ? 'bg-emerald-500 text-white shadow-lg'
-                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-                        }`}
-                >
-                    BUY
-                </button>
-                <button
-                    onClick={() => setAction('SELL')}
-                    className={`flex-1 py-2 rounded-lg font-bold transition-all ${action === 'SELL'
-                        ? 'bg-rose-500 text-white shadow-lg'
-                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
-                        }`}
-                >
-                    SELL
-                </button>
-            </div>
+      {/* Quantity & Preset Chips */}
+      <div>
+        <div className="flex justify-between items-center text-[10px] text-slate-400 mb-1">
+          <span>SHARES</span>
+          <span className="text-slate-500">MAX: 1,000,000</span>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="number"
+            min="1"
+            value={shares}
+            onChange={(e) => setShares(Math.max(1, parseInt(e.target.value, 10) || 1))}
+            className="flex-1 bg-[#090e17] border border-white/10 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+          />
+          <div className="flex gap-1">
+            {[5, 10, 50, 100].map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => setShares(preset)}
+                className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-[10px] text-slate-300 font-bold border border-white/5"
+              >
+                +{preset}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
-            <div className="space-y-6">
-                <div className="grid grid-cols-2 gap-4">
-                    <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 transition-colors">
-                        <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1 transition-colors">Current Price</p>
-                        <p className="text-2xl font-black text-slate-900 dark:text-white transition-colors">
-                            {formatCurrency(convertPrice(currentPrice, getNativeCurrency(ticker)), currency)}
-                        </p>
-                    </div>
-                    <div className={`p-4 rounded-2xl border transition-all ${sentimentScore > 0
-                        ? 'bg-emerald-500/5 border-emerald-500/20'
-                        : sentimentScore < 0
-                            ? 'bg-rose-500/5 border-rose-500/20'
-                            : 'bg-slate-500/5 border-slate-500/20'
-                        }`}>
-                        <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1 transition-colors">AI Sentiment</p>
-                        <div className="flex items-center gap-2">
-                            <Activity className={`w-4 h-4 ${sentimentScore > 0 ? 'text-emerald-500' : sentimentScore < 0 ? 'text-rose-500' : 'text-slate-500'}`} />
-                            <p className={`text-lg font-bold transition-colors ${sentimentScore > 0 ? 'text-emerald-500' : sentimentScore < 0 ? 'text-rose-500' : 'text-slate-500'}`}>
-                                {sentimentLabel || 'Neutral'}
-                            </p>
-                        </div>
-                    </div>
-                </div>
+      {/* Summary Box */}
+      <div className="p-2.5 rounded bg-black/40 border border-white/5 text-xs space-y-1">
+        <div className="flex justify-between text-[11px] text-slate-400">
+          <span>ESTIMATED VALUE</span>
+          <span className="text-white font-bold">${totalCost}</span>
+        </div>
+        <div className="flex justify-between text-[11px] text-slate-400">
+          <span>PAPER CASH</span>
+          <span className="text-emerald-400 font-bold">${Number(balance || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
+        </div>
+      </div>
 
-                <div className="space-y-2">
-                    <div className="flex justify-between items-center ml-1">
-                        <label className="text-sm font-bold text-slate-600 dark:text-slate-400 transition-colors">Shares to {action.toLowerCase()}</label>
-                        <span className="text-xs text-slate-500 dark:text-slate-500 transition-colors">Min: 0.01</span>
-                    </div>
-                    <input
-                        type="number"
-                        min="0.01"
-                        step="0.01"
-                        value={shares}
-                        onChange={(e) => setShares(e.target.value)}
-                        className="w-full bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 rounded-xl py-4 px-6 text-xl font-black text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                    />
-                </div>
+      {/* Execution Feedback Message */}
+      {message.text && (
+        <div
+          className={`p-2 rounded text-xs flex items-center gap-1.5 ${
+            message.type === "success"
+              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+              : "bg-coral-500/10 text-coral-400 border border-coral-500/20"
+          }`}
+        >
+          {message.type === "success" ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
+          <span className="truncate">{message.text}</span>
+        </div>
+      )}
 
-                <div className="p-4 rounded-2xl bg-blue-500/5 border border-blue-500/10 transition-colors">
-                    <div className="flex justify-between items-center">
-                        <span className="text-slate-600 dark:text-slate-400 font-medium transition-colors">Estimated Total</span>
-                        <span className={`text-xl font-black transition-colors ${!canAfford && action === 'BUY' ? 'text-rose-500' : 'text-slate-900 dark:text-white'}`}>
-                            {formatCurrency(convertPrice(totalCost, getNativeCurrency(ticker)), currency)}
-                        </span>
-                    </div>
-                    {!canAfford && action === 'BUY' && (
-                        <p className="text-xs text-rose-500 mt-2 font-bold flex items-center gap-1">
-                            <AlertCircle className="w-3 h-3" /> Insufficient balance
-                        </p>
-                    )}
-                </div>
+      {/* Submit Button */}
+      <button
+        type="button"
+        disabled={loading || (action === "BUY" && !canAfford)}
+        onClick={handleTrade}
+        className={`w-full py-2 rounded text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+          action === "BUY"
+            ? "bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-950/40"
+            : "bg-coral-500 hover:bg-coral-400 text-white shadow-coral-950/40"
+        }`}
+      >
+        {loading
+          ? "TRANSACTING..."
+          : !canAfford && action === "BUY"
+          ? "INSUFFICIENT FUNDS"
+          : `${action} ${numShares} ${ticker}`}
+      </button>
 
-                <button
-                    onClick={handleTrade}
-                    disabled={loading || !canAfford || shares <= 0}
-                    className={`w-full py-4 rounded-xl font-black text-lg shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95 ${action === 'BUY'
-                        ? 'bg-emerald-500 hover:bg-emerald-400 text-white shadow-emerald-500/20'
-                        : 'bg-rose-500 hover:bg-rose-400 text-white shadow-rose-500/20'
-                        } disabled:opacity-50 disabled:active:scale-100`}
-                >
-                    {loading ? (
-                        <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    ) : (
-                        <>
-                            {action === 'BUY' ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
-                            CONFIRM {action}
-                        </>
-                    )}
-                </button>
-
-                <AnimatePresence>
-                    {message.text && (
-                        <motion.div
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.9 }}
-                            className={`p-4 rounded-xl border flex items-center gap-3 ${message.type === 'success'
-                                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                                : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-                                }`}
-                        >
-                            {message.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
-                            <p className="text-sm font-bold">{message.text}</p>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-            </div>
-        </motion.div>
-    );
-};
-
-export default TradingPanel;
+      <div className="text-center">
+        <span className="text-[9px] text-slate-500">PAPER SIMULATION · ATOMIC EXECUTION</span>
+      </div>
+    </div>
+  );
+}

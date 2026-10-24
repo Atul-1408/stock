@@ -1,202 +1,232 @@
-import React, { useState } from 'react';
-import { X, Minus, Plus, Loader2 } from 'lucide-react';
-import api from '../utils/api';
-import { toast } from 'react-toastify';
+import React, { useState } from "react";
+import { X, Minus, Plus, Loader2, ShieldCheck, AlertCircle } from "lucide-react";
+import api from "../utils/api";
+import { toast } from "react-toastify";
 
-const OrderWindow = ({ stock, side: initialSide, onClose, onOrderPlaced }) => {
-    const [side, setSide] = useState(initialSide || 'BUY');
-    const [orderType, setOrderType] = useState('MARKET');
-    const [productType, setProductType] = useState('CNC');
-    const [quantity, setQuantity] = useState(1);
-    const [price, setPrice] = useState(stock.last_price || 0);
-    const [triggerPrice, setTriggerPrice] = useState('');
-    const [validity, setValidity] = useState('DAY');
-    const [loading, setLoading] = useState(false);
+export default function OrderWindow({ stock, side: initialSide, onClose, onOrderPlaced }) {
+  const [side, setSide] = useState(initialSide || "BUY");
+  const [orderType, setOrderType] = useState("MARKET");
+  const [productType, setProductType] = useState("CNC");
+  const [quantity, setQuantity] = useState(1);
+  const [price, setPrice] = useState(stock.last_price || 0);
+  const [triggerPrice, setTriggerPrice] = useState("");
+  const [validity, setValidity] = useState("DAY");
+  const [loading, setLoading] = useState(false);
 
-    const isBuy = side === 'BUY';
-    const accent = isBuy ? 'emerald' : 'red';
-    const ltp = stock.last_price || price;
-    const totalAmount = quantity * (orderType === 'MARKET' ? ltp : price);
+  const isBuy = side === "BUY";
+  const ltp = stock.last_price || price;
+  const numQty = Math.max(1, parseInt(quantity, 10) || 1);
+  const totalAmount = numQty * (orderType === "MARKET" ? ltp : price);
 
-    const handleSubmit = async () => {
-        setLoading(true);
-        try {
-            await api.post('/orders', {
-                symbol: stock.symbol,
-                side,
-                order_type: orderType,
-                product_type: productType,
-                quantity,
-                price: orderType !== 'MARKET' ? price : null,
-                trigger_price: (orderType === 'SL' || orderType === 'SL-M') ? triggerPrice : null,
-                validity,
-            });
-            toast.success(`${side} order placed for ${stock.symbol}`);
-            onOrderPlaced?.();
-            onClose?.();
-        } catch (err) {
-            toast.error(err.response?.data?.message || 'Order failed');
-        } finally {
-            setLoading(false);
-        }
-    };
+  const handleSubmit = async () => {
+    setLoading(true);
+    try {
+      await api.post("/orders", {
+        symbol: stock.symbol,
+        side,
+        order_type: orderType,
+        product_type: productType,
+        quantity: numQty,
+        price: orderType !== "MARKET" ? parseFloat(price) : null,
+        trigger_price: orderType === "SL" || orderType === "SL-M" ? parseFloat(triggerPrice) : null,
+        validity,
+      });
+      toast.success(`${side} order submitted for ${stock.symbol}`);
+      onOrderPlaced?.();
+      onClose?.();
+    } catch (err) {
+      toast.error(err.response?.data?.message || "Order rejected by desk");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    return (
-        <div className="bg-white/5 dark:bg-slate-800/50 backdrop-blur-sm border border-white/10 rounded-2xl overflow-hidden">
-            {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-                <div>
-                    <span className="text-white font-bold text-sm">{stock.symbol.replace('.NS', '')}</span>
-                    <span className="text-gray-400 text-xs ml-2">{stock.exchange}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <span className="text-white font-bold">
-                        {stock.currency === 'INR' ? '₹' : '$'}{Number(ltp).toFixed(2)}
-                    </span>
-                    <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
-                        <X className="w-4 h-4 text-gray-400" />
-                    </button>
-                </div>
-            </div>
-
-            <div className="p-4 space-y-4">
-                {/* Buy / Sell Toggle */}
-                <div className="grid grid-cols-2 gap-1 bg-white/5 p-1 rounded-xl">
-                    <button
-                        onClick={() => setSide('BUY')}
-                        className={`py-2 rounded-lg text-sm font-bold transition-all ${isBuy ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/25' : 'text-gray-400 hover:text-gray-200'
-                            }`}
-                    >BUY</button>
-                    <button
-                        onClick={() => setSide('SELL')}
-                        className={`py-2 rounded-lg text-sm font-bold transition-all ${!isBuy ? 'bg-red-500 text-white shadow-lg shadow-red-500/25' : 'text-gray-400 hover:text-gray-200'
-                            }`}
-                    >SELL</button>
-                </div>
-
-                {/* Order Type */}
-                <div className="grid grid-cols-4 gap-1 bg-white/5 p-1 rounded-xl">
-                    {['MARKET', 'LIMIT', 'SL', 'SL-M'].map(t => (
-                        <button
-                            key={t}
-                            onClick={() => setOrderType(t)}
-                            className={`py-1.5 rounded-lg text-xs font-bold transition-all ${orderType === t ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
-                                }`}
-                        >{t}</button>
-                    ))}
-                </div>
-
-                {/* Product Type */}
-                <div>
-                    <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Product</label>
-                    <div className="grid grid-cols-3 gap-1 bg-white/5 p-1 rounded-xl">
-                        {[
-                            { value: 'CNC', label: 'Delivery' },
-                            { value: 'MIS', label: 'Intraday' },
-                            { value: 'NRML', label: 'Normal' },
-                        ].map(p => (
-                            <button
-                                key={p.value}
-                                onClick={() => setProductType(p.value)}
-                                className={`py-1.5 rounded-lg text-xs font-bold transition-all ${productType === p.value ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-gray-200'
-                                    }`}
-                            >{p.label}</button>
-                        ))}
-                    </div>
-                </div>
-
-                {/* Quantity */}
-                <div>
-                    <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Quantity</label>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={() => setQuantity(q => Math.max(1, q - 1))}
-                            className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
-                        ><Minus className="w-4 h-4 text-gray-400" /></button>
-                        <input
-                            type="number"
-                            value={quantity}
-                            onChange={e => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                            className="flex-1 bg-white/5 border border-white/10 rounded-xl py-2 px-3 text-center text-white font-bold text-lg focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                            min="1"
-                        />
-                        <button
-                            onClick={() => setQuantity(q => q + 1)}
-                            className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
-                        ><Plus className="w-4 h-4 text-gray-400" /></button>
-                    </div>
-                </div>
-
-                {/* Price (for LIMIT / SL orders) */}
-                {orderType !== 'MARKET' && (
-                    <div>
-                        <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Price</label>
-                        <input
-                            type="number"
-                            step="0.01"
-                            value={price}
-                            onChange={e => setPrice(parseFloat(e.target.value) || 0)}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl py-2 px-3 text-white font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                        />
-                    </div>
-                )}
-
-                {/* Trigger Price (for SL / SL-M) */}
-                {(orderType === 'SL' || orderType === 'SL-M') && (
-                    <div>
-                        <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1 block">Trigger Price</label>
-                        <input
-                            type="number"
-                            step="0.01"
-                            value={triggerPrice}
-                            onChange={e => setTriggerPrice(parseFloat(e.target.value) || 0)}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl py-2 px-3 text-white font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                        />
-                    </div>
-                )}
-
-                {/* Validity */}
-                <div className="flex gap-2">
-                    {['DAY', 'IOC'].map(v => (
-                        <button
-                            key={v}
-                            onClick={() => setValidity(v)}
-                            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${validity === v ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'bg-white/5 text-gray-400 border border-white/10'
-                                }`}
-                        >{v === 'DAY' ? 'Day' : 'IOC'}</button>
-                    ))}
-                </div>
-
-                {/* Summary */}
-                <div className="bg-white/5 rounded-xl p-3 space-y-2">
-                    <div className="flex justify-between text-xs">
-                        <span className="text-gray-400">Est. Amount</span>
-                        <span className="text-white font-bold">{stock.currency === 'INR' ? '₹' : '$'}{totalAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                        <span className="text-gray-400">Order</span>
-                        <span className="text-gray-300">{orderType} • {productType} • {validity}</span>
-                    </div>
-                </div>
-
-                {/* Submit */}
-                <button
-                    onClick={handleSubmit}
-                    disabled={loading}
-                    className={`w-full py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 ${isBuy
-                            ? 'bg-emerald-500 hover:bg-emerald-400 text-white shadow-lg shadow-emerald-500/25'
-                            : 'bg-red-500 hover:bg-red-400 text-white shadow-lg shadow-red-500/25'
-                        } disabled:opacity-50`}
-                >
-                    {loading ? (
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                        `${side} ${quantity} × ${stock.symbol.replace('.NS', '')} @ ${orderType === 'MARKET' ? 'MARKET' : price}`
-                    )}
-                </button>
-            </div>
+  return (
+    <div className="terminal-card overflow-hidden font-mono border-cyan-500/30 shadow-2xl">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2.5 bg-[#090e17] border-b border-white/10">
+        <div className="flex items-center gap-2">
+          <span className="text-white font-bold text-sm tracking-wider">{stock.symbol}</span>
+          <span className="text-cyan-400 text-[10px] bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
+            {stock.exchange || "EQUITY"}
+          </span>
         </div>
-    );
-};
+        <div className="flex items-center gap-3">
+          <span className="text-white font-bold text-xs">
+            LTP: ${Number(ltp).toFixed(2)}
+          </span>
+          <button
+            onClick={onClose}
+            className="p-1 hover:bg-white/10 rounded text-slate-400 hover:text-white transition-colors"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      </div>
 
-export default OrderWindow;
+      <div className="p-4 space-y-3.5">
+        {/* Buy / Sell Action Selector */}
+        <div className="grid grid-cols-2 gap-1.5 p-1 bg-black/40 rounded-lg border border-white/5">
+          <button
+            type="button"
+            onClick={() => setSide("BUY")}
+            className={`py-1.5 rounded text-xs font-bold transition-all ${
+              isBuy ? "bg-emerald-500 text-black shadow-sm" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            BUY (LONG)
+          </button>
+          <button
+            type="button"
+            onClick={() => setSide("SELL")}
+            className={`py-1.5 rounded text-xs font-bold transition-all ${
+              !isBuy ? "bg-coral-500 text-white shadow-sm" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            SELL (SHORT)
+          </button>
+        </div>
+
+        {/* Order Type */}
+        <div>
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+            ORDER TYPE
+          </label>
+          <div className="grid grid-cols-4 gap-1 p-1 bg-black/40 rounded-lg border border-white/5">
+            {["MARKET", "LIMIT", "SL", "SL-M"].map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setOrderType(t)}
+                className={`py-1 rounded text-[11px] font-bold transition-all ${
+                  orderType === t ? "bg-white/15 text-white" : "text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Product Type */}
+        <div>
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+            PRODUCT
+          </label>
+          <div className="grid grid-cols-3 gap-1 p-1 bg-black/40 rounded-lg border border-white/5">
+            {[
+              { value: "CNC", label: "DELIVERY (CNC)" },
+              { value: "MIS", label: "INTRADAY (MIS)" },
+              { value: "NRML", label: "NORMAL (NRML)" },
+            ].map((p) => (
+              <button
+                key={p.value}
+                type="button"
+                onClick={() => setProductType(p.value)}
+                className={`py-1 rounded text-[10px] font-bold transition-all ${
+                  productType === p.value ? "bg-white/15 text-white" : "text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Quantity Field */}
+        <div>
+          <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+            <span>QUANTITY</span>
+            <span className="text-slate-500">LOT SIZE: 1</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setQuantity(Math.max(1, numQty - 1))}
+              className="p-2 rounded bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5"
+            >
+              <Minus size={13} />
+            </button>
+            <input
+              type="number"
+              min="1"
+              value={quantity}
+              onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              className="flex-1 bg-[#090e17] border border-white/10 rounded py-1.5 px-3 text-center text-xs text-white focus:outline-none focus:border-cyan-500/50"
+            />
+            <button
+              type="button"
+              onClick={() => setQuantity(numQty + 1)}
+              className="p-2 rounded bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5"
+            >
+              <Plus size={13} />
+            </button>
+          </div>
+        </div>
+
+        {/* Price Input (if not MARKET) */}
+        {orderType !== "MARKET" && (
+          <div>
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+              LIMIT PRICE ($)
+            </label>
+            <input
+              type="number"
+              step="0.05"
+              value={price}
+              onChange={(e) => setPrice(parseFloat(e.target.value) || 0)}
+              className="w-full bg-[#090e17] border border-white/10 rounded py-1.5 px-3 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
+        )}
+
+        {/* Trigger Price (for SL / SL-M) */}
+        {(orderType === "SL" || orderType === "SL-M") && (
+          <div>
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+              TRIGGER PRICE ($)
+            </label>
+            <input
+              type="number"
+              step="0.05"
+              value={triggerPrice}
+              onChange={(e) => setTriggerPrice(e.target.value)}
+              className="w-full bg-[#090e17] border border-white/10 rounded py-1.5 px-3 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
+        )}
+
+        {/* Financial Summary */}
+        <div className="p-2.5 rounded bg-black/40 border border-white/5 text-xs space-y-1">
+          <div className="flex justify-between text-slate-400 text-[11px]">
+            <span>ESTIMATED VALUE</span>
+            <span className="text-white font-bold">${Number(totalAmount).toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between text-slate-400 text-[11px]">
+            <span>VALIDITY</span>
+            <span className="text-cyan-400 font-bold">{validity}</span>
+          </div>
+        </div>
+
+        {/* Submit Button */}
+        <button
+          type="button"
+          disabled={loading}
+          onClick={handleSubmit}
+          className={`w-full py-2.5 rounded text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 flex items-center justify-center gap-2 ${
+            isBuy
+              ? "bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-950/40"
+              : "bg-coral-500 hover:bg-coral-400 text-white shadow-coral-950/40"
+          }`}
+        >
+          {loading && <Loader2 size={13} className="animate-spin" />}
+          <span>{side} {numQty} {stock.symbol} @ {orderType === "MARKET" ? "MKT" : `$${price}`}</span>
+        </button>
+
+        <div className="text-center text-[9px] text-slate-500">
+          PAPER SIMULATION · ATOMIC EXECUTION CONFIRMATION
+        </div>
+      </div>
+    </div>
+  );
+}

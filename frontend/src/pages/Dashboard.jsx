@@ -1,317 +1,315 @@
-import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { TrendingUp, TrendingDown, Globe2, Activity, Briefcase } from "lucide-react";
+import React, { useState, useEffect, useCallback } from "react";
+import {
+  TrendingUp,
+  TrendingDown,
+  Globe2,
+  Activity,
+  Wallet,
+  PieChart,
+  RefreshCw,
+  AlertCircle,
+  Clock,
+  Layers,
+} from "lucide-react";
 import { useCurrency, getNativeCurrency } from "../contexts/CurrencyContext";
 import { formatCurrency } from "../utils/currency";
-import { tickerService } from "../services/TickerService";
 import api from "../utils/api";
 
-import SearchBar from "../components/SearchBar";
-import SentimentChart from "../components/SentimentChart";
 import PriceChart from "../components/PriceChart";
+import SentimentChart from "../components/SentimentChart";
 import NewsFeed from "../components/NewsFeed";
 import MarketMood from "../components/MarketMood";
-import StockSidebar from "../components/StockSidebar";
 import TradingPanel from "../components/TradingPanel";
-import Portfolio from "../components/Portfolio";
-import TransactionHistory from "../components/TransactionHistory";
+import MarketBriefWidget from "../components/MarketBriefWidget";
+import StockIntelligenceCard from "../components/StockIntelligenceCard";
 
-const getMoodData = (sentiments) => {
-    if (!sentiments || sentiments.length === 0) return { score: 0, label: 'Neutral' };
-    const avg = sentiments.reduce((acc, s) => acc + s.sentiment_score, 0) / sentiments.length;
-    if (avg > 0.1) return { score: avg, label: 'Positive' };
-    if (avg < -0.1) return { score: avg, label: 'Negative' };
-    return { score: avg, label: 'Neutral' };
-};
-
-// Quick-look market cards shown before any stock is searched
-const QUICK_TICKERS = [
-    { t: "RELIANCE.NS", n: "Reliance Ind.", flag: "🇮🇳" },
-    { t: "TCS.NS", n: "TCS", flag: "🇮🇳" },
-    { t: "HDFCBANK.NS", n: "HDFC Bank", flag: "🇮🇳" },
-    { t: "AAPL", n: "Apple", flag: "🇺🇸" },
-    { t: "TSLA", n: "Tesla", flag: "🇺🇸" },
-    { t: "NVDA", n: "NVIDIA", flag: "🇺🇸" },
+const DEFAULT_TICKERS = [
+  { symbol: "RELIANCE.NS", name: "Reliance Ind.", exchange: "NSE" },
+  { symbol: "TCS.NS", name: "Tata Consultancy", exchange: "NSE" },
+  { symbol: "HDFCBANK.NS", name: "HDFC Bank", exchange: "NSE" },
+  { symbol: "AAPL", name: "Apple Inc.", exchange: "NASDAQ" },
+  { symbol: "NVDA", name: "NVIDIA Corp.", exchange: "NASDAQ" },
+  { symbol: "TSLA", name: "Tesla Inc.", exchange: "NASDAQ" },
 ];
 
-function MarketOverview({ onSelect }) {
-    const { currency, convertPrice } = useCurrency();
-    const [cards, setCards] = useState(QUICK_TICKERS.map(t => ({ ...t, price: null, change: null, changePct: null })));
+export default function Dashboard() {
+  const { currency, convertPrice } = useCurrency();
 
-    useEffect(() => {
-        const componentId = 'dashboard-overview';
-        
-        const handleUpdate = (data) => {
-            const map = {};
-            data.forEach(row => { map[row.ticker] = row; });
-            setCards(QUICK_TICKERS.map(q => ({
-                ...q,
-                ...(map[q.t] || {}),
-            })));
-        };
+  const [activeSymbol, setActiveSymbol] = useState("AAPL");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-        const dashboardTickers = QUICK_TICKERS.map(t => t.t);
+  const [indices, setIndices] = useState([]);
+  const [tickerPrices, setTickerPrices] = useState({});
+  const [sentiments, setSentiments] = useState([]);
+  const [prices, setPrices] = useState([]);
+  const [news, setNews] = useState([]);
 
-        // Subscribe for updates
-        tickerService.subscribe(componentId, handleUpdate, dashboardTickers);
+  const [user, setUser] = useState(null);
+  const [portfolio, setPortfolio] = useState({ holdings: [], total_market_value: 0, total_pnl: 0 });
+  const [transactions, setTransactions] = useState([]);
 
-        return () => {
-            tickerService.unsubscribe(componentId);
-        };
-    }, []);
+  // Fetch macro market indices and user account data
+  const fetchMarketContext = useCallback(async () => {
+    try {
+      const [indicesRes, userRes, portRes, transRes] = await Promise.all([
+        api.get("/market/indices").catch(() => ({ data: { indices: [] } })),
+        api.get("/auth/me").catch(() => ({ data: { user: null } })),
+        api.get("/portfolio").catch(() => ({ data: { data: { holdings: [], total_market_value: 0, total_pnl: 0 } } })),
+        api.get("/transactions?limit=6").catch(() => ({ data: { data: [] } })),
+      ]);
 
-    return (
-        <motion.div
-            key="overview"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="space-y-6"
-        >
-            <div className="flex items-center gap-2 mb-2">
-                <Globe2 className="w-4 h-4 text-accent" />
-                <span className="text-xs font-black tracking-widest uppercase text-slate-500">Market Snapshot</span>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {cards.map((c) => {
-                    const up = c.change === null ? null : c.change >= 0;
-                    return (
-                        <motion.button
-                            key={c.t}
-                            whileHover={{ scale: 1.03 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => onSelect(c.t)}
-                            className="card p-5 text-left group hover:border-accent/40 transition-all"
-                        >
-                            <div className="flex justify-between items-start mb-3">
-                                <span className="text-lg">{c.flag}</span>
-                                {up !== null && (
-                                    <span className={`flex items-center gap-0.5 text-xs font-bold px-2 py-0.5 rounded-full ${up ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-                                        {up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                                        {up && "+"}{c.changePct?.toFixed(2)}%
-                                    </span>
-                                )}
-                            </div>
-                            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">{c.n}</p>
-                            <p className="text-xl font-black text-slate-900 dark:text-white">
-                                {c.price ? formatCurrency(convertPrice(c.price, getNativeCurrency(c.t)), currency) : "—"}
-                            </p>
-                            <p className={`text-xs mt-1 font-semibold ${up ? 'text-emerald-400' : up === null ? 'text-slate-500' : 'text-rose-400'}`}>
-                                {c.change !== null ? `${c.change >= 0 ? "+" : ""}${c.change?.toFixed(2)}` : "Loading…"}
-                            </p>
-                            <div className="mt-3 text-[10px] font-bold text-accent opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-widest">
-                                Analyze →
-                            </div>
-                        </motion.button>
-                    );
-                })}
-            </div>
-            <div className="card p-6 border-dashed border-2 bg-slate-500/5 dark:bg-slate-400/5">
-                <div className="flex items-center gap-3 mb-3">
-                    <Activity className="w-5 h-5 text-accent" />
-                    <p className="font-black text-slate-700 dark:text-slate-200">Select a stock to begin analysis</p>
+      if (indicesRes.data?.indices) setIndices(indicesRes.data.indices);
+      if (userRes.data?.user) setUser(userRes.data.user);
+      if (portRes.data?.data) setPortfolio(portRes.data.data);
+      if (transRes.data?.data) setTransactions(transRes.data.data);
+    } catch (err) {
+      console.error("Context fetch error:", err);
+    }
+  }, []);
+
+  // Fetch specific ticker details (prices, sentiments, news)
+  const fetchSymbolData = useCallback(async (sym) => {
+    const cleanSym = (sym || "AAPL").toUpperCase().trim();
+    setActiveSymbol(cleanSym);
+    setLoading(true);
+    setError("");
+
+    try {
+      const [sentRes, priceRes, newsRes] = await Promise.all([
+        api.get(`/sentiment/${cleanSym}`),
+        api.get(`/prices/${cleanSym}`),
+        api.get(`/news/${cleanSym}`),
+      ]);
+
+      setSentiments(sentRes.data?.data || []);
+      setPrices(priceRes.data?.data || []);
+      setNews(newsRes.data?.data || []);
+    } catch (err) {
+      setSentiments([]);
+      setPrices([]);
+      setNews([]);
+      setError(
+        err.response?.status === 404
+          ? `Symbol '${cleanSym}' not found in active market cache.`
+          : "Temporary data feed connection error. Retrying..."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMarketContext();
+    fetchSymbolData(activeSymbol);
+    const interval = setInterval(fetchMarketContext, 30000);
+    return () => clearInterval(interval);
+  }, [fetchMarketContext]);
+
+  // Current active asset stats
+  const latestPrice = prices.length > 0 ? prices[prices.length - 1].close : null;
+  const prevPrice = prices.length > 1 ? prices[prices.length - 2].close : latestPrice;
+  const priceDelta = latestPrice && prevPrice ? latestPrice - prevPrice : 0;
+  const priceDeltaPct = prevPrice ? (priceDelta / prevPrice) * 100 : 0;
+  const isUp = priceDelta >= 0;
+
+  return (
+    <div className="space-y-4">
+      {/* ── 1. Top Strip: Market Indices & Account Summary ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
+        {/* Market Indices (8 Cols) */}
+        <div className="xl:col-span-8 flex gap-2.5 overflow-x-auto no-scrollbar py-0.5">
+          {indices.length > 0 ? (
+            indices.map((idx) => {
+              const up = (idx.change_pct || 0) >= 0;
+              return (
+                <div
+                  key={idx.index_name}
+                  className="terminal-card px-3.5 py-2.5 flex-shrink-0 min-w-[170px] flex flex-col justify-between font-mono"
+                >
+                  <div className="flex justify-between items-center text-[10px] text-slate-400">
+                    <span className="font-bold text-slate-300">{idx.display_name || idx.index_name}</span>
+                    <span className="text-[9px] text-slate-500">LIVE</span>
+                  </div>
+                  <div className="flex items-baseline justify-between mt-1">
+                    <span className="text-sm font-bold text-white">
+                      {Number(idx.current_value || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                    </span>
+                    <span className={`text-[11px] font-bold flex items-center gap-0.5 ${up ? "text-emerald-400" : "text-coral-400"}`}>
+                      {up ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                      {up ? "+" : ""}{Number(idx.change_pct || 0).toFixed(2)}%
+                    </span>
+                  </div>
                 </div>
-                <p className="text-sm text-slate-500">
-                    Click any card above or use the sidebar to explore sentiment, price charts, and AI-powered news briefings.
-                </p>
+              );
+            })
+          ) : (
+            <div className="terminal-card px-4 py-2 flex items-center gap-2 text-xs font-mono text-slate-400">
+              <Clock size={13} className="animate-spin text-cyan-400" />
+              <span>SYNCING GLOBAL INDICES...</span>
             </div>
-        </motion.div>
-    );
-}
-
-const Dashboard = () => {
-    const [ticker, setTicker] = useState("");
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState("");
-    const [hasSearched, setHasSearched] = useState(false);
-
-    const [sentiments, setSentiments] = useState([]);
-    const [prices, setPrices] = useState([]);
-    const [news, setNews] = useState([]);
-
-    const [balance, setBalance] = useState(0);
-    const [portfolioData, setPortfolioData] = useState({ holdings: [], total_market_value: 0, total_pnl: 0 });
-    const [transactions, setTransactions] = useState([]);
-    const [userLoading, setUserLoading] = useState(true);
-
-    const refreshUserData = async () => {
-        try {
-            const [userRes, portfolioRes, transRes] = await Promise.all([
-                api.get('/auth/me'),
-                api.get('/portfolio'),
-                api.get('/transactions?limit=10')
-            ]);
-            setBalance(userRes.data.user.current_balance);
-            setPortfolioData(portfolioRes.data.data);
-            setTransactions(transRes.data.data);
-        } catch (err) {
-            console.error("Error fetching user data", err);
-        } finally {
-            setUserLoading(false);
-        }
-    };
-
-    useEffect(() => { refreshUserData(); }, []);
-
-    const fetchDashboardData = async (nextTicker) => {
-        const cleanTicker = (nextTicker || "").toUpperCase().trim();
-        if (!cleanTicker) return;
-
-        setHasSearched(true);
-        setTicker(cleanTicker);
-        setError("");
-        setLoading(true);
-
-        try {
-            const cached = sessionStorage.getItem(`cache_${cleanTicker}`);
-            if (cached) {
-                const { sentiments, prices, news } = JSON.parse(cached);
-                setSentiments(sentiments);
-                setPrices(prices);
-                setNews(news);
-                setLoading(false);
-                return;
-            }
-
-            const [sentimentRes, pricesRes, newsRes] = await Promise.all([
-                api.get(`/sentiment/${cleanTicker}`),
-                api.get(`/prices/${cleanTicker}`),
-                api.get(`/news/${cleanTicker}`),
-            ]);
-
-            const data = {
-                sentiments: sentimentRes.data?.data || [],
-                prices: pricesRes.data?.data || [],
-                news: newsRes.data?.data || [],
-            };
-
-            setSentiments(data.sentiments);
-            setPrices(data.prices);
-            setNews(data.news);
-
-            sessionStorage.setItem(`cache_${cleanTicker}`, JSON.stringify(data));
-        } catch (err) {
-            setSentiments([]);
-            setPrices([]);
-            setNews([]);
-
-            if (!err.response) {
-                setError("Network error: Cannot connect to backend. Please ensure Flask API is running.");
-            } else if (err.response.status === 429) {
-                setError("Too many requests. Please wait a moment and try again.");
-            } else if (err.response.status === 404) {
-                setError(`Ticker '${cleanTicker}' not found. Please verify the symbol (e.g., AAPL).`);
-            } else {
-                setError("An unexpected error occurred while fetching dashboard data.");
-            }
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    // Show data if we have ANY of prices/news/sentiments
-    const hasData = prices.length > 0 || news.length > 0 || sentiments.length > 0;
-
-    return (
-        <div className="flex flex-col lg:flex-row gap-6">
-            {/* Left Sidebar */}
-            <div className="hidden lg:block w-64 xl:w-72 flex-shrink-0">
-                <StockSidebar activeTicker={ticker} onSelect={fetchDashboardData} />
-            </div>
-
-            <div className="flex-1 w-full min-w-0">
-                <SearchBar onSearch={fetchDashboardData} loading={loading} />
-
-                <div className="mt-6">
-                    <AnimatePresence mode="wait">
-                        {!hasSearched ? (
-                            <MarketOverview key="overview" onSelect={fetchDashboardData} />
-                        ) : error ? (
-                            <motion.div
-                                key="error"
-                                initial={{ opacity: 0, scale: 0.95 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-8 text-center"
-                            >
-                                <div className="text-rose-500 text-3xl mb-4">⚠️</div>
-                                <p className="text-lg font-medium mb-4 text-slate-800 dark:text-slate-200">{error}</p>
-                                <button
-                                    onClick={() => fetchDashboardData(ticker)}
-                                    className="px-6 py-2 bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition-colors shadow-lg shadow-rose-900/20"
-                                >
-                                    Try Again
-                                </button>
-                            </motion.div>
-                        ) : hasData && !loading ? (
-                            <motion.main
-                                key="data"
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                className="space-y-6"
-                            >
-                                {sentiments.length > 0 && <MarketMood sentiments={sentiments} />}
-
-                                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                                    {/* Left Column: Charts and News */}
-                                    <div className="xl:col-span-2 space-y-6">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                            <SentimentChart sentiments={sentiments} />
-                                            <PriceChart prices={prices} sentiments={sentiments} />
-                                        </div>
-                                        <NewsFeed news={news} />
-                                    </div>
-
-                                    {/* Right Column: Trading and Portfolio */}
-                                    <div className="xl:col-span-1 space-y-6">
-                                        <TradingPanel
-                                            ticker={ticker}
-                                            currentPrice={prices.length > 0 ? prices[prices.length - 1].close : 0}
-                                            balance={balance}
-                                            sentimentScore={getMoodData(sentiments).score}
-                                            sentimentLabel={getMoodData(sentiments).label}
-                                            onTradeSuccess={(tradeResult) => {
-                                                setBalance(tradeResult.balance);
-                                                setPortfolioData(tradeResult.portfolio);
-                                                // Also refresh transactions to show the new one
-                                                api.get('/transactions?limit=10').then(res => setTransactions(res.data.data));
-                                            }}
-                                        />
-
-                                        <section>
-                                            <div className="flex items-center gap-3 mb-6">
-                                                <div className="p-2 bg-blue-500/10 rounded-lg">
-                                                    <Briefcase className="w-5 h-5 text-blue-500" />
-                                                </div>
-                                                <h3 className="text-xl font-black text-slate-900 dark:text-white">Your Portfolio</h3>
-                                            </div>
-                                            <Portfolio data={portfolioData} loading={userLoading} />
-                                        </section>
-
-                                        <TransactionHistory data={transactions} loading={userLoading} />
-                                    </div>
-                                </div>
-                            </motion.main>
-                        ) : null}
-
-                        {loading && (
-                            <motion.div
-                                key="loading"
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                exit={{ opacity: 0 }}
-                                className="py-20 flex flex-col items-center"
-                            >
-                                <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin"></div>
-                                <p className="mt-4 text-slate-600 dark:text-slate-400 font-medium animate-pulse">
-                                    Gathering market insights for {ticker}...
-                                </p>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </div>
-            </div>
+          )}
         </div>
-    );
-};
 
-export default Dashboard;
+        {/* Paper Account Summary Widget (4 Cols) */}
+        <div className="xl:col-span-4 terminal-card p-2.5 flex items-center justify-between font-mono text-xs">
+          <div className="flex items-center gap-2.5 pl-1">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <Wallet size={16} />
+            </div>
+            <div>
+              <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">PORTFOLIO EQUITY</div>
+              <div className="text-sm font-bold text-white">
+                ${Number((user?.current_balance || 0) + (portfolio?.total_market_value || 0)).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+              </div>
+            </div>
+          </div>
+
+          <div className="text-right pr-1">
+            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">UNREALIZED P&L</div>
+            <div className={`text-xs font-bold ${portfolio.total_pnl >= 0 ? "text-emerald-400" : "text-coral-400"}`}>
+              {portfolio.total_pnl >= 0 ? "+" : ""}${Number(portfolio.total_pnl || 0).toFixed(2)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── AI Market Intelligence Brief Strip ── */}
+      <MarketBriefWidget />
+
+      {/* ── 2. Symbol Command Header & Quick Switcher ── */}
+      <div className="terminal-card p-3 flex flex-wrap items-center justify-between gap-3 font-mono">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-base font-bold text-white tracking-wider">{activeSymbol}</span>
+            <span className="text-[10px] text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.5 rounded font-bold">
+              TERMINAL ASSET
+            </span>
+          </div>
+
+          {latestPrice != null && (
+            <div className="flex items-baseline gap-2 pl-3 border-l border-white/10">
+              <span className="text-lg font-bold text-white">${latestPrice.toFixed(2)}</span>
+              <span className={`text-xs font-bold flex items-center gap-0.5 ${isUp ? "text-emerald-400" : "text-coral-400"}`}>
+                {isUp ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                {isUp ? "+" : ""}{priceDelta.toFixed(2)} ({priceDeltaPct.toFixed(2)}%)
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Quick Ticker Tabs */}
+        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+          {DEFAULT_TICKERS.map((t) => (
+            <button
+              key={t.symbol}
+              onClick={() => fetchSymbolData(t.symbol)}
+              className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                activeSymbol === t.symbol
+                  ? "bg-white/10 text-white font-bold border border-white/15"
+                  : "text-slate-400 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              {t.symbol}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="p-3 rounded-lg bg-coral-500/10 border border-coral-500/20 text-xs font-mono text-coral-400 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={15} />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={() => fetchSymbolData(activeSymbol)}
+            className="px-2 py-0.5 rounded bg-coral-500/20 hover:bg-coral-500/30 text-coral-300 font-bold"
+          >
+            RETRY
+          </button>
+        </div>
+      )}
+
+      {/* ── 3. Main Workspace Grid (Left: Charts & Table / Right: Execution & News) ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+        {/* Left Column (8 Cols) */}
+        <div className="xl:col-span-8 space-y-4">
+          {/* Stock Synthesis & Price Dynamics Card */}
+          <StockIntelligenceCard symbol={activeSymbol} />
+
+          {/* Main Price Chart */}
+          <PriceChart prices={prices} sentiments={sentiments} ticker={activeSymbol} />
+
+          {/* AI Sentiment Trend Oscillator */}
+          <SentimentChart sentiments={sentiments} />
+
+          {/* Active Holdings & Portfolio Table */}
+          <div className="terminal-card p-4 font-mono">
+            <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2">
+              <span className="text-xs font-bold text-white tracking-wider flex items-center gap-1.5">
+                <Layers size={14} className="text-cyan-400" />
+                ACTIVE HOLDINGS & POSITIONS ({portfolio.holdings?.length || 0})
+              </span>
+              <span className="text-[10px] text-slate-500">PAPER BROKERAGE LEDGER</span>
+            </div>
+
+            {portfolio.holdings && portfolio.holdings.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-white/5 text-[10px] text-slate-400 uppercase">
+                      <th className="pb-2 font-semibold">TICKER</th>
+                      <th className="pb-2 font-semibold text-right">SHARES</th>
+                      <th className="pb-2 font-semibold text-right">AVG PRICE</th>
+                      <th className="pb-2 font-semibold text-right">CURRENT VAL</th>
+                      <th className="pb-2 font-semibold text-right">TOTAL INVESTED</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {portfolio.holdings.map((h) => (
+                      <tr key={h.ticker} className="hover:bg-white/5 transition-colors">
+                        <td className="py-2.5 font-bold text-white">{h.ticker}</td>
+                        <td className="py-2.5 text-right text-slate-200">{Number(h.shares).toLocaleString()}</td>
+                        <td className="py-2.5 text-right text-slate-300">${Number(h.avg_buy_price).toFixed(2)}</td>
+                        <td className="py-2.5 text-right text-white font-bold">${Number(h.current_value || h.total_invested).toFixed(2)}</td>
+                        <td className="py-2.5 text-right text-slate-400">${Number(h.total_invested).toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="py-8 text-center text-xs text-slate-500">
+                NO ACTIVE PAPER HOLDINGS · EXECUTE A TRADE VIA THE DESK
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Column (4 Cols) */}
+        <div className="xl:col-span-4 space-y-4">
+          {/* Market Mood Barometer */}
+          <MarketMood sentiments={sentiments} />
+
+          {/* Quick Execution Terminal Panel */}
+          <TradingPanel
+            ticker={activeSymbol}
+            sentimentScore={sentiments.length > 0 ? sentiments[0].sentiment_score : 0}
+            sentimentLabel={sentiments.length > 0 ? sentiments[0].sentiment_label : "Neutral"}
+            currentPrice={latestPrice || 0}
+            balance={user?.current_balance || 0}
+            onTradeSuccess={() => {
+              fetchMarketContext();
+            }}
+          />
+
+          {/* Real-time AI News Briefing Wire */}
+          <NewsFeed news={news} />
+        </div>
+      </div>
+    </div>
+  );
+}

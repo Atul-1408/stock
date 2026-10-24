@@ -1,78 +1,85 @@
-import { motion } from "framer-motion";
-import { ExternalLink, Newspaper } from "lucide-react";
+import React from "react";
+import { ExternalLink, Radio } from "lucide-react";
 
-function NewsFeed({ news }) {
+export default function NewsFeed({ news }) {
   if (!news || news.length === 0) {
     return (
-      <div className="card p-8 text-center border-dashed border-2 bg-slate-500/5">
-        <Newspaper className="w-12 h-12 text-slate-400 mx-auto mb-4 opacity-50" />
-        <p className="text-slate-500 font-medium tracking-tight">No recent news available for this ticker.</p>
+      <div className="terminal-card p-6 text-center border-dashed">
+        <Radio className="w-6 h-6 text-slate-500 mx-auto mb-2 opacity-50" />
+        <p className="font-mono text-xs text-slate-400 font-semibold">NO NEWS DISPATCHES FOR THIS SYMBOL</p>
+        <p className="text-[11px] text-slate-500 mt-1">Live news wire awaiting new headline ingestions</p>
       </div>
     );
   }
 
-  const container = {
-    hidden: { opacity: 0 },
-    show: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1
-      }
-    }
-  };
-
-  const item = {
-    hidden: { opacity: 0, x: 20 },
-    show: { opacity: 1, x: 0 }
-  };
-
   return (
-    <section className="space-y-4">
-      <h2 className="text-xl font-bold flex items-center gap-2 px-1 dark:text-slate-100">
-        <Newspaper className="w-5 h-5 text-accent" />
-        Latest Briefing
-      </h2>
-      <motion.div
-        variants={container}
-        initial="hidden"
-        animate="show"
-        className="space-y-4"
-      >
-        {news.map((article, idx) => (
-          <motion.div
-            key={article.url || idx}
-            variants={item}
-            className="card group hover:border-accent/40 transition-all p-5"
-          >
-            <div className="flex justify-between items-start gap-4 mb-3">
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter ${article.sentiment_label === "Positive" ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" :
-                  article.sentiment_label === "Negative" ? "bg-rose-500/10 text-rose-500 border border-rose-500/20" :
-                    "bg-slate-500/10 text-slate-400 border border-slate-500/20"
-                }`}>
-                {article.sentiment_label || "Neutral"}
-              </span>
-              <span className="text-[10px] text-slate-500 font-semibold">{article.source}</span>
+    <div className="space-y-2.5">
+      <div className="flex items-center justify-between px-1">
+        <span className="font-mono text-xs font-bold text-white tracking-wider flex items-center gap-1.5">
+          <Radio size={13} className="text-cyan-400 animate-pulse" />
+          INTELLIGENCE WIRE ({news.length})
+        </span>
+        <span className="text-[10px] font-mono text-slate-500">REAL-TIME SENTIMENT</span>
+      </div>
+
+      <div className="space-y-2 max-h-[480px] overflow-y-auto custom-scrollbar pr-1">
+        {news.map((article, idx) => {
+          const isPos = article.sentiment_label === "Positive";
+          const isNeg = article.sentiment_label === "Negative";
+          const label = isPos ? "BULLISH" : isNeg ? "BEARISH" : "NEUTRAL";
+          const badgeClass = isPos ? "badge-positive" : isNeg ? "badge-negative" : "badge-neutral";
+          const conf = article.confidence ? Math.round(article.confidence * 100) : null;
+          const status = article.processing_status ? article.processing_status.toUpperCase() : "LIVE";
+          const pubDate = article.published_at ? article.published_at.slice(0, 16).replace("T", " ") : null;
+
+          return (
+            <div
+              key={article.url || idx}
+              className="terminal-card terminal-card-interactive p-3 flex flex-col justify-between"
+            >
+              <div className="flex items-center justify-between gap-2 mb-1.5 font-mono text-[10px]">
+                <div className="flex items-center gap-1.5">
+                  <span className={`px-1.5 py-0.5 rounded font-bold ${badgeClass}`}>
+                    {label} {article.sentiment_score ? `(${article.sentiment_score > 0 ? "+" : ""}${Number(article.sentiment_score).toFixed(2)})` : ""}
+                  </span>
+                  {conf != null && (
+                    <span className="text-slate-400 font-medium">
+                      {conf}% CONF
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 text-slate-400 font-semibold">
+                  <span className="text-[9px] text-slate-500 bg-white/5 px-1 py-0.5 rounded">
+                    {status}
+                  </span>
+                  <span className="truncate max-w-[120px]">
+                    {article.source || "WIRE FEED"}
+                  </span>
+                </div>
+              </div>
+
+              <h3 className="text-xs font-semibold leading-relaxed text-slate-200 line-clamp-2">
+                {article.title}
+              </h3>
+
+              <div className="mt-2 pt-1.5 border-t border-white/5 flex items-center justify-between font-mono text-[9px] text-slate-500">
+                <span>{pubDate || "RECENT"}</span>
+                {article.url && (
+                  <a
+                    href={article.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-bold text-cyan-400 hover:text-cyan-300 transition-colors"
+                  >
+                    <span>SOURCE</span>
+                    <ExternalLink size={9} />
+                  </a>
+                )}
+              </div>
             </div>
-
-            <h3 className="text-sm font-bold leading-snug group-hover:text-accent transition-colors dark:text-slate-200">
-              {article.title}
-            </h3>
-
-            {article.url && (
-              <a
-                href={article.url}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 mt-4 text-xs font-bold text-slate-500 hover:text-accent transition-colors"
-              >
-                Read Article <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
-          </motion.div>
-        ))}
-      </motion.div>
-    </section>
+          );
+        })}
+      </div>
+    </div>
   );
 }
-
-export default NewsFeed;

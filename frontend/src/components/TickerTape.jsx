@@ -18,33 +18,74 @@ export default function TickerTape() {
     );
 
     useEffect(() => {
-        // Subscribe to ticker updates using the service
-        const componentId = 'ticker-tape';
-        
+        const componentId = "ticker-tape";
         const handleUpdate = (data) => {
             if (data?.length) {
                 setItems(data);
             }
         };
 
-        // Subscribe for updates
         tickerService.subscribe(componentId, handleUpdate, TAPE_TICKERS);
 
-        // Cleanup
         return () => {
             tickerService.unsubscribe(componentId);
         };
     }, []);
 
-    // Triplicate so the loop is seamless at any screen width
-    const row = [...items, ...items, ...items];
+    const renderTickerGroup = (keyPrefix, isAriaHidden = false) => (
+        <div
+            className="flex items-center flex-shrink-0"
+            aria-hidden={isAriaHidden ? "true" : undefined}
+        >
+            {items.map((item, i) => {
+                const up = item.change === null ? null : item.change >= 0;
+                return (
+                    <span
+                        key={`${keyPrefix}-${item.ticker}-${i}`}
+                        style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 6,
+                            padding: "0 14px",
+                            borderRight: "1px solid rgba(255,255,255,0.06)",
+                            flexShrink: 0,
+                        }}
+                    >
+                        <span style={{ fontWeight: 800, color: "#f8fafc", fontSize: 11, letterSpacing: "0.04em" }}>
+                            {item.ticker}
+                        </span>
+                        <span style={{ fontWeight: 600, color: "rgba(255,255,255,0.8)", fontSize: 11 }}>
+                            {item.price != null
+                                ? `${sym}${Number(convertPrice(item.price, getNativeCurrency(item.ticker))).toFixed(2)}`
+                                : "—"}
+                        </span>
+                        {up !== null && (
+                            <span
+                                style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 2,
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    color: up ? "#34d399" : "#fb7185",
+                                }}
+                            >
+                                {up ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+                                {up ? "+" : ""}{Number(item.change).toFixed(2)}
+                            </span>
+                        )}
+                    </span>
+                );
+            })}
+        </div>
+    );
 
     return (
         <div
             style={{
-                background: "#0d1117",
-                borderBottom: "1px solid rgba(0,255,136,0.15)",
-                height: 40,
+                background: "#05080e",
+                borderBottom: "1px solid rgba(255,255,255,0.08)",
+                height: 32,
                 overflow: "hidden",
                 display: "flex",
                 alignItems: "center",
@@ -55,57 +96,41 @@ export default function TickerTape() {
                 zIndex: 9999,
                 width: "100%",
             }}
+            className="font-mono select-none no-scrollbar"
+            role="region"
+            aria-label="Stock Price Ticker"
         >
-            {/* Fade left */}
-            <div style={{
-                position: "absolute", left: 0, top: 0, height: "100%", width: 60,
-                background: "linear-gradient(to right, #0d1117, transparent)",
-                zIndex: 10, pointerEvents: "none",
-            }} />
-            {/* Fade right */}
-            <div style={{
-                position: "absolute", right: 0, top: 0, height: "100%", width: 60,
-                background: "linear-gradient(to left, #0d1117, transparent)",
-                zIndex: 10, pointerEvents: "none",
-            }} />
+            {/* Left fade gradient */}
+            <div
+                style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    height: "100%",
+                    width: 48,
+                    background: "linear-gradient(to right, #05080e, transparent)",
+                    zIndex: 10,
+                    pointerEvents: "none",
+                }}
+            />
+            {/* Right fade gradient */}
+            <div
+                style={{
+                    position: "absolute",
+                    right: 0,
+                    top: 0,
+                    height: "100%",
+                    width: 48,
+                    background: "linear-gradient(to left, #05080e, transparent)",
+                    zIndex: 10,
+                    pointerEvents: "none",
+                }}
+            />
 
-            <div className="ticker-tape-track" style={{ animationDuration: `${row.length * 2.5}s` }}>
-                {row.map((item, i) => {
-                    const up = item.change === null ? null : item.change >= 0;
-                    return (
-                        <span
-                            key={`${item.ticker}-${i}`}
-                            style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: 6,
-                                padding: "0 18px",
-                                borderRight: "1px solid rgba(255,255,255,0.06)",
-                                flexShrink: 0,
-                            }}
-                        >
-                            <span style={{ fontWeight: 800, color: "#fff", fontSize: 12, letterSpacing: "0.03em" }}>
-                                {item.ticker}
-                            </span>
-                            <span style={{ fontWeight: 700, color: "rgba(255,255,255,0.85)", fontSize: 12 }}>
-                                {item.price != null ? `${sym}${Number(convertPrice(item.price, getNativeCurrency(item.ticker))).toFixed(2)}` : "—"}
-                            </span>
-                            {up !== null && (
-                                <span style={{
-                                    display: "inline-flex", alignItems: "center", gap: 2,
-                                    fontSize: 11, fontWeight: 700,
-                                    color: up ? "#34d399" : "#f87171",
-                                }}>
-                                    {up ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                                    {up ? "+" : ""}{Number(item.change).toFixed(2)}
-                                    <span style={{ opacity: 0.65 }}>
-                                        ({up ? "+" : ""}{Number(item.changePct).toFixed(2)}%)
-                                    </span>
-                                </span>
-                            )}
-                        </span>
-                    );
-                })}
+            {/* Seamless 2-group marquee track */}
+            <div className="ticker-tape-track flex items-center no-scrollbar">
+                {renderTickerGroup("primary", false)}
+                {renderTickerGroup("duplicate", true)}
             </div>
         </div>
     );

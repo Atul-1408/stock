@@ -11,6 +11,8 @@ data/*.db
 *.db-shm
 *.lock
 data/backups/
+backups/
+*.db.gz
 
 # Environment and secrets
 .env

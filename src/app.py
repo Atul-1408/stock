@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
 
 import threading
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 import json
 import pandas as pd
 from flask import Flask, jsonify, send_from_directory, request
@@ -40,6 +40,11 @@ app.url_map.strict_slashes = False
 # Production Setup
 error_handler.setup_logging(app)
 error_handler.register_error_handlers(app)
+
+# Validate production configuration and safety constraints
+config_validation = Config.validate_production_config()
+for warning_msg in config_validation.get("warnings", []):
+    app.logger.warning(f"[CONFIG WARNING] {warning_msg}")
 
 # JWT Configuration
 app.config['JWT_SECRET_KEY'] = Config.JWT_SECRET_KEY
@@ -81,7 +86,13 @@ CORS(
 
 @app.after_request
 def after_request(response):
-    response.headers.add('Cross-Origin-Opener-Policy', 'same-origin-allow-popups')
+    response.headers['Cross-Origin-Opener-Policy'] = 'same-origin-allow-popups'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    if Config.IS_PRODUCTION:
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response
 
 
@@ -92,6 +103,56 @@ limiter = Limiter(
     default_limits=["5000 per day", "500 per hour"],
     storage_uri=Config.RATELIMIT_STORAGE_URI
 )
+
+# ==========================================
+# HEALTH & OBSERVABILITY PROBES
+# ==========================================
+@app.route('/api/health', methods=['GET'])
+@limiter.exempt
+def health_check():
+    """System health check endpoint for monitoring and observability."""
+    db_ok = False
+    db_error = None
+    try:
+        with database.get_connection() as conn:
+            conn.execute("SELECT 1;").fetchone()
+            db_ok = True
+    except Exception as e:
+        db_error = str(e)
+        app.logger.error(f"Health check DB probe failed: {e}")
+
+    worker_status = worker_manager.get_health_status()
+    overall_status = "healthy" if db_ok else "degraded"
+
+    return jsonify({
+        "status": overall_status,
+        "environment": Config.ENVIRONMENT,
+        "trading_mode": Config.TRADING_MODE,
+        "live_trading_enabled": Config.IS_LIVE_TRADING_ENABLED,
+        "database": "connected" if db_ok else "unreachable",
+        "database_error": db_error,
+        "workers": worker_status,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }), (200 if db_ok else 503)
+
+
+@app.route('/api/health/live', methods=['GET'])
+@limiter.exempt
+def liveness_probe():
+    """Liveness probe for orchestrators (Kubernetes / ECS)."""
+    return jsonify({"status": "live"}), 200
+
+
+@app.route('/api/health/ready', methods=['GET'])
+@limiter.exempt
+def readiness_probe():
+    """Readiness probe verifying DB and core infrastructure."""
+    try:
+        with database.get_connection() as conn:
+            conn.execute("SELECT 1;").fetchone()
+        return jsonify({"status": "ready"}), 200
+    except Exception as e:
+        return jsonify({"status": "not_ready", "error": str(e)}), 503
 
 # In-memory cache for high-traffic public endpoints
 _ticker_tape_cache = {
@@ -701,94 +762,19 @@ def get_balance_route():
 @jwt_required()
 @limiter.limit("60 per minute")
 def get_sentiment_for_ticker(ticker):
-    """Return the last 30 days of sentiment data for a ticker."""
+    """Return the last 30 days of sentiment data for a ticker with live caching."""
     ticker = ticker.upper()
     data = database.get_sentiments_last_30_days(ticker)
     if data:
         return jsonify({"status": "success", "data": data}), 200
 
-    # Live fallback when pipeline hasn't populated DB (common for crypto tickers)
+    # Live processing with normalization, deduplication, and database caching
     try:
-        from datetime import datetime, timezone
-        import yfinance as yf
-        from sentiment_service import SentimentAnalyzer
-        from config import Config
-        from news_fetcher import fetch_news_for_ticker
-
-        analyzer = SentimentAnalyzer()
-
-        articles = []
-        try:
-            yf_news = yf.Ticker(ticker).news or []
-            for n in yf_news[:10]:
-                articles.append(
-                    {
-                        "title": n.get("title", ""),
-                        "url": n.get("link", ""),
-                        "source": n.get("publisher", ""),
-                        "published_at": n.get("providerPublishTime", ""),
-                    }
-                )
-        except Exception as e:
-            app.logger.warning(f"Live yfinance news fallback error for {ticker}: {e}")
-
-        if not articles and Config.NEWS_API_KEY:
-            try:
-                articles = fetch_news_for_ticker(ticker)[:10]
-            except Exception as e:
-                app.logger.warning(f"Live NewsAPI fallback error for {ticker}: {e}")
-
-        # Finnhub fallback (helps a lot for crypto tickers where yfinance returns no news)
-        if not articles:
-            finnhub_key = os.getenv('FINNHUB_API_KEY', '').strip()
-            if finnhub_key:
-                try:
-                    import requests as req
-
-                    # Finnhub free tiers often support crypto category news.
-                    r = req.get(
-                        'https://finnhub.io/api/v1/news',
-                        params={'category': 'crypto', 'token': finnhub_key},
-                        timeout=8,
-                    )
-                    if r.status_code == 200:
-                        items = r.json() or []
-                        # Keep it simple: take top 10 crypto headlines.
-                        for it in items[:10]:
-                            articles.append(
-                                {
-                                    'title': it.get('headline', '') or '',
-                                    'url': it.get('url', '') or '',
-                                    'source': it.get('source', '') or '',
-                                    'published_at': it.get('datetime', '') or '',
-                                }
-                            )
-                    else:
-                        app.logger.warning(f"Finnhub news status {r.status_code} for {ticker}")
-                except Exception as e:
-                    app.logger.warning(f"Finnhub crypto news fallback error for {ticker}: {e}")
-
-        analyzed_at = datetime.now(timezone.utc).isoformat()
-        live_data = []
-        for a in articles:
-            title = (a.get("title") or "").strip()
-            result = analyzer.analyze_headline(title)
-            live_data.append(
-                {
-                    "ticker": ticker,
-                    "title": title,
-                    "url": a.get("url", ""),
-                    "published_at": a.get("published_at", ""),
-                    "sentiment_label": result.get("label", "Neutral"),
-                    "sentiment_score": float(result.get("score", 0.0)),
-                    "model_name": result.get("model", "vader"),
-                    "analyzed_at": analyzed_at,
-                }
-            )
-
+        from news_service import process_and_analyze_news
+        live_data = process_and_analyze_news(ticker, limit=15)
         return jsonify({"status": "success", "data": live_data}), 200
     except Exception as e:
-        app.logger.warning(f"Sentiment live fallback error for {ticker}: {e}")
+        app.logger.warning(f"Sentiment live processing error for {ticker}: {e}")
         return jsonify({"status": "success", "data": []}), 200
 
 @app.route('/api/prices/<ticker>', methods=['GET'])
@@ -819,94 +805,52 @@ def get_prices_for_ticker(ticker):
 
 @app.route('/api/news/<ticker>', methods=['GET'])
 @jwt_required()
-@limiter.limit("30 per minute")
+@limiter.limit("60 per minute")
 def get_news_for_ticker(ticker):
-    """Return recent news with sentiment for a ticker."""
+    """Return recent news with normalized sentiment, confidence, and deduplication for a ticker."""
     ticker = ticker.upper()
-    data = database.get_news_with_latest_sentiment(ticker)
-    # If no cached news, return live headlines (yfinance first, then NewsAPI)
-    if not data:
-        try:
-            from datetime import datetime, timezone
-            import yfinance as yf
-            from sentiment_service import SentimentAnalyzer
-            from config import Config
-            from news_fetcher import fetch_news_for_ticker
+    try:
+        from news_service import process_and_analyze_news
+        data = process_and_analyze_news(ticker, limit=15)
+        return jsonify({"status": "success", "data": data}), 200
+    except Exception as e:
+        app.logger.warning(f"News fetch error for {ticker}: {e}")
+        # Graceful fallback to existing DB records
+        cached = database.get_news_with_latest_sentiment(ticker) or []
+        return jsonify({"status": "success", "data": cached}), 200
 
-            analyzer = SentimentAnalyzer()
-            articles = []
+@app.route('/api/market/brief', methods=['GET'])
+@jwt_required()
+@limiter.limit("30 per minute")
+def get_market_brief():
+    """Return structured AI Market Brief with verified facts, interpretation, and influential news."""
+    try:
+        from market_brief_service import generate_market_brief
+        brief = generate_market_brief()
+        return jsonify(brief), 200
+    except Exception as e:
+        app.logger.warning(f"Market brief generation error: {e}")
+        return jsonify({
+            "status": "error",
+            "message": "Market brief generation temporarily unavailable.",
+            "data": None
+        }), 500
 
-            try:
-                news_items = yf.Ticker(ticker).news or []
-                for n in news_items[:10]:
-                    articles.append(
-                        {
-                            "title": n.get("title", ""),
-                            "url": n.get("link", ""),
-                            "source": n.get("publisher", ""),
-                            "published_at": n.get("providerPublishTime", ""),
-                            "description": n.get("summary", ""),
-                        }
-                    )
-            except Exception as e:
-                app.logger.warning(f"Live yfinance news error for {ticker}: {e}")
-
-            if not articles and Config.NEWS_API_KEY:
-                try:
-                    articles = fetch_news_for_ticker(ticker)[:10]
-                except Exception as e:
-                    app.logger.warning(f"Live NewsAPI error for {ticker}: {e}")
-
-            # Finnhub fallback (useful for crypto)
-            if not articles:
-                finnhub_key = os.getenv('FINNHUB_API_KEY', '').strip()
-                if finnhub_key:
-                    try:
-                        import requests as req
-                        r = req.get(
-                            'https://finnhub.io/api/v1/news',
-                            params={'category': 'crypto', 'token': finnhub_key},
-                            timeout=8,
-                        )
-                        if r.status_code == 200:
-                            items = r.json() or []
-                            for it in items[:10]:
-                                articles.append(
-                                    {
-                                        'title': it.get('headline', '') or '',
-                                        'url': it.get('url', '') or '',
-                                        'source': it.get('source', '') or '',
-                                        'published_at': it.get('datetime', '') or '',
-                                        'description': it.get('summary', '') or '',
-                                    }
-                                )
-                        else:
-                            app.logger.warning(f"Finnhub news status {r.status_code} for {ticker}")
-                    except Exception as e:
-                        app.logger.warning(f"Finnhub crypto news fallback error for {ticker}: {e}")
-
-            analyzed_at = datetime.now(timezone.utc).isoformat()
-            data = []
-            for a in articles:
-                title = (a.get("title") or "").strip()
-                result = analyzer.analyze_headline(title)
-                data.append(
-                    {
-                        "title": title,
-                        "url": a.get("url", ""),
-                        "source": a.get("source", ""),
-                        "published_at": a.get("published_at", ""),
-                        "description": a.get("description", ""),
-                        "sentiment_label": result.get("label", "Neutral"),
-                        "sentiment_score": float(result.get("score", 0.0)),
-                        "model_name": result.get("model", "vader"),
-                        "analyzed_at": analyzed_at,
-                    }
-                )
-        except Exception as e:
-            app.logger.warning(f"News live fallback error for {ticker}: {e}")
-            data = []
-    return jsonify({"status": "success", "data": data}), 200
+@app.route('/api/stocks/<symbol>/intelligence', methods=['GET'])
+@jwt_required()
+@limiter.limit("60 per minute")
+def get_stock_intelligence_api(symbol):
+    """Return concise stock intelligence, price dynamics, and news sentiment with limitations."""
+    try:
+        from stock_intelligence_service import get_stock_intelligence
+        intel = get_stock_intelligence(symbol)
+        return jsonify(intel), 200
+    except Exception as e:
+        app.logger.warning(f"Stock intelligence error for {symbol}: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Unable to generate intelligence report for {symbol}."
+        }), 500
 
 @app.route('/api/stock/<ticker>', methods=['GET'])
 @jwt_required()
@@ -1138,8 +1082,21 @@ def send_chat_message_api(conversation_id):
 @app.route('/api/chat/analyze/<ticker>', methods=['GET'])
 @jwt_required()
 def chat_analyze_stock_api(ticker):
-    analysis = chatbot_engine.chatbot.analyze_stock_for_chat(ticker.upper())
-    return jsonify({'analysis': analysis}), 200
+    try:
+        from stock_intelligence_service import get_stock_intelligence
+        intel = get_stock_intelligence(ticker.upper())
+        analysis = (
+            f"### {intel['ticker']} Intelligence Report\n\n"
+            f"- **Price:** ${intel['price_metrics']['current_price']:.2f} ({intel['price_metrics']['trend']})\n"
+            f"- **Sentiment:** {intel['sentiment_metrics']['label']} (Score: {intel['sentiment_metrics']['score']:+.2f}, N={intel['sentiment_metrics']['sample_size']} headlines)\n"
+            f"- **Data Sufficiency:** {'Robust' if intel['sentiment_metrics']['is_sufficient_data'] else 'Limited Sample Size'}\n\n"
+            f"**Summary:** {intel['summary']}\n\n"
+            f"*{intel['limitations']}*"
+        )
+        return jsonify({'analysis': analysis, 'intelligence': intel}), 200
+    except Exception:
+        analysis = chatbot_engine.chatbot.analyze_stock_for_chat(ticker.upper())
+        return jsonify({'analysis': analysis}), 200
 
 # ==========================================
 # LEADERBOARD & SOCIAL ROUTES

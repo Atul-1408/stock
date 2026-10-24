@@ -493,6 +493,16 @@ def init_db() -> None:
         # SQLite doesn't support ALTER COLUMN, so we handle this at insert time
         # by not enforcing NOT NULL on password_hash for new Google users.
 
+        # Phase 5: AI Intelligence Schema Migrations
+        try:
+            cursor.execute("ALTER TABLE articles ADD COLUMN processing_status TEXT DEFAULT 'analyzed'")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE sentiments ADD COLUMN confidence REAL")
+        except Exception:
+            pass
+
         # Bot System
         cursor.execute(
             """
@@ -621,9 +631,9 @@ def insert_articles(ticker: str, articles: List[Dict]) -> int:
                 cursor.execute(
                     """
                     INSERT INTO articles (
-                        ticker, title, description, url, source, published_at, fetched_at
+                        ticker, title, description, url, source, published_at, fetched_at, processing_status
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ticker.upper(),
@@ -633,6 +643,7 @@ def insert_articles(ticker: str, articles: List[Dict]) -> int:
                         article.get("source", "Unknown"),
                         article.get("published_at"),
                         fetched_at,
+                        article.get("processing_status", "analyzed"),
                     ),
                 )
                 inserted += 1
@@ -696,8 +707,33 @@ def get_article_id_by_url(url: Optional[str]) -> Optional[int]:
         return int(row["id"]) if row else None
 
 
-def insert_sentiment(article_id: int, model_name: str, label: str, score: float) -> int:
-    """Insert one sentiment record. Returns inserted row count (1 or 0)."""
+def get_cached_sentiment_for_url(url: Optional[str]) -> Optional[Dict]:
+    """Look up existing sentiment for an article URL to prevent reprocessing."""
+    if not url:
+        return None
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                s.sentiment_label,
+                s.sentiment_score,
+                s.confidence,
+                s.model_name,
+                s.analyzed_at
+            FROM sentiments s
+            JOIN articles a ON a.id = s.article_id
+            WHERE a.url = ?
+            ORDER BY s.analyzed_at DESC LIMIT 1
+            """,
+            (url,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def insert_sentiment(article_id: int, model_name: str, label: str, score: float, confidence: Optional[float] = None) -> int:
+    """Insert one sentiment record with optional confidence. Returns inserted row count (1 or 0)."""
     analyzed_at = datetime.now(timezone.utc).isoformat()
 
     with get_connection() as conn:
@@ -705,11 +741,11 @@ def insert_sentiment(article_id: int, model_name: str, label: str, score: float)
         cursor.execute(
             """
             INSERT INTO sentiments (
-                article_id, model_name, sentiment_label, sentiment_score, analyzed_at
+                article_id, model_name, sentiment_label, sentiment_score, confidence, analyzed_at
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (article_id, model_name, label, score, analyzed_at),
+            (article_id, model_name, label, score, confidence, analyzed_at),
         )
         conn.commit()
         return cursor.rowcount
@@ -747,8 +783,10 @@ def get_news_with_latest_sentiment(ticker: str) -> List[Dict]:
                 a.url,
                 a.source,
                 a.published_at,
+                a.processing_status,
                 s.sentiment_label,
                 s.sentiment_score,
+                s.confidence,
                 s.model_name,
                 s.analyzed_at
             FROM articles a
@@ -780,9 +818,12 @@ def get_sentiments_last_30_days(ticker: str) -> List[Dict]:
                 a.ticker,
                 a.title,
                 a.url,
+                a.source,
                 a.published_at,
+                a.processing_status,
                 s.sentiment_label,
                 s.sentiment_score,
+                s.confidence,
                 s.model_name,
                 s.analyzed_at
             FROM sentiments s
