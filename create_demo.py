@@ -2,8 +2,10 @@
 import sqlite3
 from datetime import datetime, timezone
 
+from pathlib import Path
+
 def create_demo_alerts():
-    db_file = "c:\\Users\\Atul\\project\\stock\\data\\stock_dashboard.db"
+    db_file = Path(__file__).resolve().parent / "data" / "stock_dashboard.db"
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
     

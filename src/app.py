@@ -799,6 +799,8 @@ def get_prices_for_ticker(ticker):
                     {"trade_date": str(idx.date()), "close": float(row["Close"])}
                     for idx, row in df.iterrows()
                 ]
+                if data:
+                    database.insert_prices(ticker, data)
         except Exception as e:
             app.logger.warning(f"Price fetch error for {ticker}: {e}")
     return jsonify({"status": "success", "data": data}), 200
