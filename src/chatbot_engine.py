@@ -15,7 +15,7 @@ class TradingChatbot:
             if not api_key:
                 raise ValueError("GEMINI_API_KEY environment variable is not set.")
             self.client = genai.Client(api_key=api_key)
-            self.model_name = 'gemini-flash-latest'
+            self.model_name = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
         except Exception as e:
             print(f"Gemini Init Error: {e}")
             self.client = None
@@ -57,11 +57,19 @@ class TradingChatbot:
             if not self.client:
                  raise Exception("Gemini Client not initialized")
 
-            # Call Gemini API using Client pattern
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=full_content
-            )
+            # Call Gemini API with automatic model fallback
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=full_content
+                )
+            except Exception:
+                fallback_models = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash-lite"]
+                alt_model = next((m for m in fallback_models if m != self.model_name), "gemini-flash-lite-latest")
+                response = self.client.models.generate_content(
+                    model=alt_model,
+                    contents=full_content
+                )
             
             if not response or not response.text:
                 raise Exception("Empty response from AI")
