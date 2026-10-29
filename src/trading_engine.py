@@ -10,7 +10,15 @@ from database import (
 )
 
 def get_current_price(ticker: str) -> float:
-    """Get the latest closing price using yfinance."""
+    """Get the latest closing price using market data cache or yfinance."""
+    try:
+        from database import get_market_data
+        md = get_market_data(ticker.upper())
+        if md and md.get('last_price') and float(md['last_price']) > 0:
+            return float(md['last_price'])
+    except Exception:
+        pass
+
     try:
         stock = yf.Ticker(ticker.upper())
         data = stock.history(period='1d')

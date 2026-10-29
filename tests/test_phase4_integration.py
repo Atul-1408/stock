@@ -29,6 +29,15 @@ os.environ["JWT_SECRET_KEY"] = "phase4-integration-test-secret-key-32-bytes!"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["HF_HUB_OFFLINE"] = "1"
 
+# Standalone fallback: ensure an isolated temporary DB is used if not running via pytest conftest
+if "DATABASE_PATH" not in os.environ and "DB_PATH" not in os.environ:
+    import tempfile
+    _test_tmp_dir = tempfile.mkdtemp(prefix="phase4_isolated_db_")
+    _test_db_path = os.path.join(_test_tmp_dir, "test_phase4_isolated.db")
+    os.environ["DATABASE_PATH"] = _test_db_path
+    os.environ["DB_PATH"] = _test_db_path
+
+
 # Mock transformers pipeline to prevent any HuggingFace downloads during testing
 try:
     import transformers
@@ -56,6 +65,9 @@ class TestPhase4Integration(unittest.TestCase):
     def setUpClass(cls):
         app.config["TESTING"] = True
         cls.client = app.test_client()
+
+        # Ensure database tables exist in the target database
+        database.init_db()
 
         # Seed an isolated user for integration testing
         cls.test_email = "phase4_operator@sovereign.internal"

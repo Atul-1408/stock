@@ -21,32 +21,42 @@ def get_historical_price(ticker: str, date: datetime) -> float:
         return 0.0
 
 def calculate_portfolio_performance(user_id):
-    """Calculate comprehensive portfolio metrics."""
+    """Calculate comprehensive portfolio metrics using WAC basis and realized P&L."""
     transactions = database.get_transactions_by_user(user_id, limit=9999)
     portfolio = database.get_user_portfolio(user_id)
     
-    # Calculate current total value
-    total_value = 0
+    # Calculate current market value and active invested capital from portfolio holdings
+    total_value = 0.0
+    active_invested = 0.0
     for holding in portfolio:
         current_price = get_current_price(holding['ticker'])
-        total_value += holding['shares'] * current_price
+        if current_price <= 0:
+            current_price = float(holding.get('avg_buy_price', 0))
+        shares = float(holding.get('shares', 0))
+        total_value += shares * current_price
+        active_invested += float(holding.get('total_invested', 0))
+
+    # Realized P&L from closed trades
+    closed_trades = database.get_closed_trades(user_id)
+    realized_pnl = sum(float(t.get('pnl', 0.0)) for t in closed_trades)
     
-    # Total Invested (from Buy transactions)
-    total_invested = sum([t['total_value'] for t in transactions if t['action'] == 'BUY'])
+    # Unrealized P&L from active positions
+    unrealized_pnl = total_value - active_invested
     
-    # P&L
-    total_pnl = total_value - total_invested
-    total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
+    # Total P&L combines realized gains/losses and unrealized paper gains/losses
+    total_pnl = realized_pnl + unrealized_pnl
+
+    # Total capital basis: active invested capital, or starting balance benchmark if zero active holdings
+    basis = active_invested if active_invested > 0 else (database.get_starting_balance(user_id) or 100000.0)
+    total_pnl_pct = (total_pnl / basis * 100) if basis > 0 else 0.0
     
     # Win Rate from closed trades
-    closed_trades = database.get_closed_trades(user_id)
-    winning_trades = len([t for t in closed_trades if t['pnl'] > 0])
-    losing_trades = len([t for t in closed_trades if t['pnl'] <= 0])
+    winning_trades = len([t for t in closed_trades if (t.get('pnl') or 0) > 0])
+    losing_trades = len([t for t in closed_trades if (t.get('pnl') or 0) <= 0])
     total_trades = len(closed_trades)
-    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
     
     if closed_trades:
-        # Use get() with default 0.0 to avoid KeyError if pnl_pct is missing (though it shouldn't be)
         best_trade = max(closed_trades, key=lambda x: x.get('pnl_pct', 0.0))
         worst_trade = min(closed_trades, key=lambda x: x.get('pnl_pct', 0.0))
     else:
@@ -54,17 +64,19 @@ def calculate_portfolio_performance(user_id):
     
     # Risk Metrics
     daily_returns = calculate_daily_returns(user_id)
-    sharpe_ratio = 0
-    volatility = 0
+    sharpe_ratio = 0.0
+    volatility = 0.0
     if len(daily_returns) > 1:
-        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() > 0 else 0
+        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() > 0 else 0.0
         volatility = daily_returns.std() * np.sqrt(252)
     
     max_drawdown = calculate_max_drawdown(user_id)
     
     return {
         'total_value': round(total_value, 2),
-        'total_invested': round(total_invested, 2),
+        'total_invested': round(active_invested, 2),
+        'realized_pnl': round(realized_pnl, 2),
+        'unrealized_pnl': round(unrealized_pnl, 2),
         'total_pnl': round(total_pnl, 2),
         'total_pnl_pct': round(total_pnl_pct, 2),
         'win_rate': round(win_rate, 2),

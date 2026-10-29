@@ -23,6 +23,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(BASE_DIR / "src"))
 
+# Fallback test isolation if run via unittest directly without pytest conftest.py
+if not os.environ.get("DATABASE_PATH"):
+    import tempfile
+    _standalone_temp_dir = tempfile.mkdtemp(prefix="sovereign_sec_test_")
+    _standalone_db = Path(_standalone_temp_dir) / "test_security.db"
+    os.environ["DATABASE_PATH"] = str(_standalone_db)
+    os.environ["DB_PATH"] = str(_standalone_db)
+    os.environ["FLASK_ENV"] = "testing"
+    os.environ["ENABLE_BACKGROUND_WORKERS"] = "false"
+
 import unittest
 from flask_jwt_extended import create_access_token
 from werkzeug.security import generate_password_hash
@@ -56,8 +66,9 @@ class TestPhase1Security(unittest.TestCase):
             )
         else:
             cls.user1_id = existing_user1['id']
-            # Reset balance to known amount
-            database.update_user_balance(cls.user1_id, 1000.0)
+
+        # Ensure user 1 balance is ALWAYS reset to known test baseline (1,000.0)
+        database.update_user_balance(cls.user1_id, 1000.0)
 
         # User 2: Private user
         cls.user2_email = "sec_test_user2_private@example.com"
@@ -223,6 +234,9 @@ class TestPhase1Security(unittest.TestCase):
 
     def test_13_order_insufficient_balance_rejected(self):
         """Test order exceeding user balance is rejected."""
+        # Ensure user 1 balance is set to known test baseline (1,000.0) regardless of execution order
+        database.update_user_balance(self.user1_id, 1000.0)
+
         with app.app_context():
             user1_token = create_access_token(identity=str(self.user1_id))
 

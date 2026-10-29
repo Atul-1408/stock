@@ -226,6 +226,8 @@ def init_db() -> None:
                 sentiment_score REAL,
                 sentiment_label TEXT,
                 commission REAL DEFAULT 0.00,
+                is_bot INTEGER DEFAULT 0,
+                realized_pnl REAL DEFAULT 0.0,
                 timestamp TEXT NOT NULL,
                 notes TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -407,6 +409,7 @@ def init_db() -> None:
                 status TEXT DEFAULT 'OPEN',
                 filled_quantity REAL DEFAULT 0,
                 filled_price REAL,
+                is_bot INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -500,6 +503,20 @@ def init_db() -> None:
             pass
         try:
             cursor.execute("ALTER TABLE sentiments ADD COLUMN confidence REAL")
+        except Exception:
+            pass
+
+        # Phase D: Unified Ledger Migrations
+        try:
+            cursor.execute("ALTER TABLE transactions ADD COLUMN is_bot INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE transactions ADD COLUMN realized_pnl REAL DEFAULT 0.0")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE orders ADD COLUMN is_bot INTEGER DEFAULT 0")
         except Exception:
             pass
 
@@ -1059,58 +1076,66 @@ def get_transactions_before_date(user_id: int, date: datetime) -> List[Dict]:
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-def get_closed_trades(user_id: int) -> List[Dict]:
+def get_closed_trades(user_id: int, is_bot: Optional[bool] = None) -> List[Dict]:
     """
-    Groups Buy/Sell transactions to identify fully closed trades for P&L analysis.
-    This is a simplified version: treats selling as closing previous buy lots (FIFO).
+    Groups Buy/Sell transactions to identify closed trades for P&L analysis
+    using the Weighted-Average Cost (WAC) accounting method.
     """
     transactions = get_transactions_by_user(user_id, limit=9999) # Get all
+    if is_bot is not None:
+        expected_bot = 1 if is_bot else 0
+        transactions = [tx for tx in transactions if int(tx.get('is_bot', 0) or 0) == expected_bot]
+
     transactions.reverse() # Chronological order
     
-    inventory = {} # ticker -> list of {'shares': qty, 'price': price}
+    inventory = {} # ticker -> {'shares': float, 'total_invested': float}
     closed_trades = []
     
     for tx in transactions:
         ticker = tx['ticker']
-        if tx['action'] == 'BUY':
-            if ticker not in inventory: inventory[ticker] = []
-            inventory[ticker].append({'shares': tx['shares'], 'price': tx['price_per_share']})
-        elif tx['action'] == 'SELL':
-            sell_qty = tx['shares']
-            if ticker in inventory:
-                # FIFO approach to close positions
-                while sell_qty > 0 and inventory[ticker]:
-                    lot = inventory[ticker][0]
-                    if lot['shares'] <= sell_qty:
-                        # Full lot closed
-                        pnl = (tx['price_per_share'] - lot['price']) * lot['shares']
-                        pnl_pct = (pnl / (lot['price'] * lot['shares'])) * 100
-                        closed_trades.append({
-                            'ticker': ticker,
-                            'shares': lot['shares'],
-                            'buy_price': lot['price'],
-                            'sell_price': tx['price_per_share'],
-                            'pnl': pnl,
-                            'pnl_pct': pnl_pct,
-                            'timestamp': tx['timestamp']
-                        })
-                        sell_qty -= lot['shares']
-                        inventory[ticker].pop(0)
-                    else:
-                        # Partial lot closed
-                        pnl = (tx['price_per_share'] - lot['price']) * sell_qty
-                        pnl_pct = (pnl / (lot['price'] * sell_qty)) * 100
-                        closed_trades.append({
-                            'ticker': ticker,
-                            'shares': sell_qty,
-                            'buy_price': lot['price'],
-                            'sell_price': tx['price_per_share'],
-                            'pnl': pnl,
-                            'pnl_pct': pnl_pct,
-                            'timestamp': tx['timestamp']
-                        })
-                        lot['shares'] -= sell_qty
-                        sell_qty = 0
+        action = str(tx['action']).upper()
+        shares = float(tx['shares'])
+        price = float(tx['price_per_share'])
+        total_val = float(tx['total_value'])
+
+        if action == 'BUY':
+            if ticker not in inventory:
+                inventory[ticker] = {'shares': 0.0, 'total_invested': 0.0}
+            inventory[ticker]['shares'] += shares
+            inventory[ticker]['total_invested'] += total_val
+        elif action == 'SELL':
+            # Check if transaction has stored realized_pnl
+            stored_pnl = tx.get('realized_pnl')
+            if stored_pnl is not None and stored_pnl != 0.0:
+                pnl = float(stored_pnl)
+                cost_basis = max(0.0, total_val - pnl)
+                buy_price = round(cost_basis / shares, 4) if shares > 0 else price
+                pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0.0
+            elif ticker in inventory and inventory[ticker]['shares'] > 0:
+                inv_shares = inventory[ticker]['shares']
+                inv_invested = inventory[ticker]['total_invested']
+                avg_buy = inv_invested / inv_shares if inv_shares > 0 else price
+                cost_basis = shares * avg_buy
+                pnl = total_val - cost_basis
+                pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0.0
+                buy_price = avg_buy
+                inventory[ticker]['shares'] = max(0.0, inv_shares - shares)
+                inventory[ticker]['total_invested'] = max(0.0, inv_invested - cost_basis)
+            else:
+                buy_price = price
+                pnl = 0.0
+                pnl_pct = 0.0
+
+            closed_trades.append({
+                'ticker': ticker,
+                'shares': shares,
+                'buy_price': round(buy_price, 4),
+                'sell_price': price,
+                'pnl': round(pnl, 2),
+                'pnl_pct': round(pnl_pct, 2),
+                'timestamp': tx['timestamp'],
+                'is_bot': int(tx.get('is_bot', 0) or 0)
+            })
                         
     return closed_trades
 
@@ -1717,11 +1742,13 @@ def execute_trade_atomic(
     order_type: str = 'MARKET',
     product_type: str = 'CNC',
     sentiment_score: Optional[float] = None,
-    sentiment_label: Optional[str] = None
+    sentiment_label: Optional[str] = None,
+    is_bot: bool = False
 ) -> Dict:
     """
     Executes a complete trade within a single atomic database transaction.
     Guarantees consistency across users balance, portfolio holdings, orders, and transaction audit logs.
+    Implements Weighted-Average Cost (WAC) accounting and precise realized P&L calculation.
     """
     symbol = symbol.strip().upper()
     side = side.strip().upper()
@@ -1729,6 +1756,8 @@ def execute_trade_atomic(
     execution_price = float(execution_price)
     total_value = round(quantity * execution_price, 4)
     now = datetime.now(timezone.utc).isoformat()
+    bot_flag = 1 if is_bot else 0
+    realized_pnl = 0.0
 
     conn = get_connection()
     try:
@@ -1788,6 +1817,9 @@ def execute_trade_atomic(
                     "message": f"Insufficient shares. You only own {existing_shares} shares of {symbol}."
                 }
 
+            avg_buy_price = float(holding_row['avg_buy_price']) if holding_row else execution_price
+            realized_pnl = round((execution_price - avg_buy_price) * quantity, 4)
+
             new_balance = round(current_balance + total_value, 4)
             cursor.execute("UPDATE users SET current_balance = ? WHERE id = ?", (new_balance, user_id))
 
@@ -1796,7 +1828,6 @@ def execute_trade_atomic(
                 cursor.execute("DELETE FROM portfolio WHERE user_id = ? AND ticker = ?", (user_id, symbol))
                 new_shares = 0.0
             else:
-                avg_buy_price = float(holding_row['avg_buy_price']) if holding_row else execution_price
                 new_total_invested = max(0.0, existing_total_invested - (quantity * avg_buy_price))
                 cursor.execute(
                     "UPDATE portfolio SET shares = ?, total_invested = ?, updated_at = ? WHERE user_id = ? AND ticker = ?",
@@ -1809,20 +1840,20 @@ def execute_trade_atomic(
         # 3. Create and fill order record
         cursor.execute(
             """
-            INSERT INTO orders (user_id, symbol, side, order_type, product_type, quantity, price, trigger_price, validity, status, filled_quantity, filled_price, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'DAY', 'FILLED', ?, ?, ?, ?)
+            INSERT INTO orders (user_id, symbol, side, order_type, product_type, quantity, price, trigger_price, validity, status, filled_quantity, filled_price, is_bot, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'DAY', 'FILLED', ?, ?, ?, ?, ?)
             """,
-            (user_id, symbol, side, order_type, product_type, quantity, execution_price, quantity, execution_price, now, now)
+            (user_id, symbol, side, order_type, product_type, quantity, execution_price, quantity, execution_price, bot_flag, now, now)
         )
         order_id = cursor.lastrowid
 
         # 4. Record transaction in audit log
         cursor.execute(
             """
-            INSERT INTO transactions (user_id, ticker, action, shares, price_per_share, total_value, sentiment_score, sentiment_label, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO transactions (user_id, ticker, action, shares, price_per_share, total_value, sentiment_score, sentiment_label, is_bot, realized_pnl, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, symbol, side, quantity, execution_price, total_value, sentiment_score, sentiment_label, now)
+            (user_id, symbol, side, quantity, execution_price, total_value, sentiment_score, sentiment_label, bot_flag, realized_pnl, now)
         )
 
         conn.commit()
@@ -1836,7 +1867,9 @@ def execute_trade_atomic(
             "filled_price": execution_price,
             "total_value": total_value,
             "new_balance": new_balance,
-            "remaining_shares": new_shares if side == 'SELL' else (existing_shares + quantity)
+            "remaining_shares": new_shares if side == 'SELL' else (existing_shares + quantity),
+            "realized_pnl": realized_pnl,
+            "is_bot": bool(is_bot)
         }
     except Exception as e:
         conn.rollback()

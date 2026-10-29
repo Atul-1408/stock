@@ -643,7 +643,7 @@ def get_bot_trades():
     """Get bot trade history"""
     user_id = int(get_jwt_identity())
     
-    trades = database.get_transactions_by_user(user_id, limit=100)
+    trades = database.get_bot_trades(user_id)
     return jsonify({'trades': trades}), 200
 
 @app.route('/api/bot/performance', methods=['GET'])
@@ -652,7 +652,7 @@ def get_bot_performance():
     """Get bot performance metrics"""
     user_id = int(get_jwt_identity())
     
-    trades = database.get_closed_trades(user_id)
+    trades = database.get_closed_bot_trades(user_id)
     
     if not trades:
         return jsonify({
@@ -666,14 +666,14 @@ def get_bot_performance():
         }), 200
     
     total_trades = len(trades)
-    winning_trades = len([t for t in trades if t.get('pnl', 0) > 0])
+    winning_trades = len([t for t in trades if (t.get('pnl') or 0) > 0])
     losing_trades = total_trades - winning_trades
     
-    total_pnl = sum(t.get('pnl', 0) for t in trades)
+    total_pnl = sum((t.get('pnl') or 0) for t in trades)
     win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
     
-    profits = [t['pnl'] for t in trades if t.get('pnl', 0) > 0]
-    losses = [t['pnl'] for t in trades if t.get('pnl', 0) < 0]
+    profits = [(t.get('pnl') or 0) for t in trades if (t.get('pnl') or 0) > 0]
+    losses = [(t.get('pnl') or 0) for t in trades if (t.get('pnl') or 0) < 0]
     
     avg_profit = sum(profits) / len(profits) if profits else 0
     avg_loss = sum(losses) / len(losses) if losses else 0
@@ -726,7 +726,19 @@ def make_trade():
     if not ticker or not action or shares is None:
         return error_response("Ticker, action, and shares are required.", 400)
     
-    result = trading_engine.execute_trade(user_id, ticker, action, float(shares), sentiment_score, sentiment_label)
+    try:
+        shares_val = float(shares)
+    except (ValueError, TypeError):
+        return error_response("Shares must be a valid number.", 400)
+
+    clean_ticker = str(ticker).strip().upper()
+    clean_action = str(action).strip().upper()
+
+    # Prevent rapid duplicate submissions
+    if duplicate_detector.is_duplicate(user_id, clean_ticker, clean_action, shares_val, None):
+        return error_response("Duplicate order detected. Please wait a moment before resubmitting.", 409)
+
+    result = trading_engine.execute_trade(user_id, clean_ticker, clean_action, shares_val, sentiment_score, sentiment_label)
     
     if result['success']:
         return jsonify(result), 200
@@ -1507,11 +1519,15 @@ def get_positions():
 
     for item in portfolio:
         symbol = item.get('ticker', item.get('symbol', ''))
-        avg_price = float(item.get('avg_price', 0) or 0)
-        quantity = float(item.get('quantity', 0) or 0)
+        avg_price = float(item.get('avg_buy_price', item.get('avg_price', 0)) or 0)
+        quantity = float(item.get('shares', item.get('quantity', 0)) or 0)
 
         md = database.get_market_data(symbol)
-        ltp = float(md.get('last_price', avg_price)) if md else avg_price
+        ltp = float(md.get('last_price')) if (md and md.get('last_price')) else None
+        if not ltp or ltp <= 0:
+            ltp = trading_engine.get_current_price(symbol)
+        if not ltp or ltp <= 0:
+            ltp = avg_price
 
         pnl = (ltp - avg_price) * quantity
         pnl_pct = ((ltp - avg_price) / avg_price * 100) if avg_price > 0 else 0

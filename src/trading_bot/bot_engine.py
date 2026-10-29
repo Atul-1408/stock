@@ -10,6 +10,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import database
 from config import Config
 
 class TradingBotEngine:
@@ -349,13 +350,37 @@ class TradingBotEngine:
         }
 
     def _execute_bot_trade(self, user_id: int, signal: Dict, config: Dict) -> None:
-        """Execute bot trade"""
+        """Execute bot trade through the unified atomic ledger."""
 
-        print(f"🚀 Executing {signal['action']} for {signal['ticker']}")
+        print(f"[BOT] Executing {signal['action']} for {signal['ticker']}")
 
         # Check if max trades per day reached
         if self._has_reached_daily_limit(user_id, config['max_trades_per_day']):
-            print(f"⚠️ Daily trade limit reached for user {user_id}")
+            print(f"[BOT] Daily trade limit reached for user {user_id}")
+            return
+
+        qty = float(signal.get('shares', 1))
+        price = float(signal['price'])
+        action = signal['action'].upper()
+        sentiment_score = signal.get('sentiment_score')
+        sentiment_label = 'POSITIVE' if (sentiment_score is not None and sentiment_score > 0) else 'NEUTRAL'
+
+        # Route through unified atomic ledger
+        trade_res = database.execute_trade_atomic(
+            user_id=user_id,
+            symbol=signal['ticker'],
+            side=action,
+            quantity=qty,
+            execution_price=price,
+            order_type='MARKET',
+            product_type='CNC',
+            sentiment_score=sentiment_score,
+            sentiment_label=sentiment_label,
+            is_bot=True
+        )
+
+        if not trade_res.get('success'):
+            print(f"[BOT] Trade rejected by ledger for user {user_id}: {trade_res.get('message')}")
             return
 
         conn = sqlite3.connect(self.db_path)
@@ -370,8 +395,8 @@ class TradingBotEngine:
              sentiment_at_entry, technical_score, ml_score, status, entry_time)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
         """, (
-            user_id, signal['ticker'], signal['action'],
-            signal.get('shares', 1), signal['price'],
+            user_id, signal['ticker'], action,
+            qty, price,
             signal.get('stop_loss'), signal.get('take_profit'),
             signal['sentiment_score'], signal['technical_score'],
             signal['ml_score'], now
@@ -384,15 +409,15 @@ class TradingBotEngine:
              technical_score, ml_score, price, reasoning, was_executed, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)
         """, (
-            user_id, signal['ticker'], signal['action'], signal['confidence'],
+            user_id, signal['ticker'], action, signal['confidence'],
             signal['sentiment_score'], signal['technical_score'],
-            signal['ml_score'], signal['price'], signal['reasoning'], now
+            signal['ml_score'], price, signal['reasoning'], now
         ))
 
         conn.commit()
         conn.close()
 
-        print(f"✅ Bot trade executed: {signal['action']} {signal['ticker']}")
+        print(f"[BOT] Trade executed successfully: {action} {signal['ticker']} (Order #{trade_res.get('order_id')})")
 
     def _check_open_positions(self, user_id: int, ticker: str, config: Dict) -> None:
         """Check open positions for stop loss / take profit"""
@@ -427,12 +452,35 @@ class TradingBotEngine:
         conn.close()
 
     def _close_bot_position(self, user_id: int, position, exit_price: float, exit_reason: str, conn: sqlite3.Connection) -> None:
-        """Close an open bot position"""
+        """Close an open bot position through the unified atomic ledger."""
 
-        print(f"🔚 Closing position: {position['ticker']} at {exit_price} ({exit_reason})")
+        print(f"[BOT] Closing position: {position['ticker']} at {exit_price} ({exit_reason})")
 
-        # Calculate P&L
-        if position['action'] == 'BUY':
+        close_side = 'SELL' if position['action'] == 'BUY' else 'BUY'
+        trade_res = database.execute_trade_atomic(
+            user_id=user_id,
+            symbol=position['ticker'],
+            side=close_side,
+            quantity=float(position['shares']),
+            execution_price=float(exit_price),
+            order_type='MARKET',
+            product_type='CNC',
+            is_bot=True
+        )
+
+        if not trade_res.get('success'):
+            print(f"[BOT] Position close rejected by ledger: {trade_res.get('message')}")
+            if "Insufficient shares" in trade_res.get('message', ''):
+                exit_reason = 'MANUAL_OR_EXTERNAL_CLOSE'
+            else:
+                return
+
+        # Calculate P&L: use ledger realized P&L if available
+        if trade_res.get('realized_pnl') is not None and trade_res.get('realized_pnl') != 0.0:
+            pnl = float(trade_res['realized_pnl'])
+            cost_basis = float(position['entry_price']) * float(position['shares'])
+            pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0.0
+        elif position['action'] == 'BUY':
             pnl = (exit_price - position['entry_price']) * position['shares']
             pnl_pct = ((exit_price - position['entry_price']) / position['entry_price']) * 100
         else:
@@ -446,11 +494,11 @@ class TradingBotEngine:
             SET exit_price = ?, pnl = ?, pnl_pct = ?, status = 'CLOSED',
                 exit_time = ?, exit_reason = ?
             WHERE id = ?
-        """, (exit_price, pnl, pnl_pct, datetime.now().isoformat(), exit_reason, position['id']))
+        """, (exit_price, round(pnl, 2), round(pnl_pct, 2), datetime.now().isoformat(), exit_reason, position['id']))
 
         conn.commit()
 
-        print(f"✅ Position closed: {exit_reason} | P&L: ${pnl:.2f} ({pnl_pct:.2f}%)")
+        print(f"[BOT] Position closed: {exit_reason} | P&L: ${pnl:.2f} ({pnl_pct:.2f}%)")
 
     def _get_current_price(self, ticker: str) -> Optional[float]:
         """Get current stock price"""
