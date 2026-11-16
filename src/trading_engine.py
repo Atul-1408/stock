@@ -1,4 +1,6 @@
 import yfinance as yf
+import logging
+logger = logging.getLogger("stock_sense.trading_engine")
 from database import (
     get_user_balance,
     update_user_balance,
@@ -9,25 +11,56 @@ from database import (
     add_transaction
 )
 
-def get_current_price(ticker: str) -> float:
-    """Get the latest closing price using market data cache or yfinance."""
+def get_current_price(ticker: str) -> Optional[float]:
+    """Get latest price using market data cache or live yfinance fallback.
+    Rejects stale cache prices during market hours (> Config.MAX_PRICE_AGE_SECONDS).
+    Returns price as float, or None if unavailable.
+    """
+    from config import Config
+    from order_validator import is_price_recent, is_market_hours
+    import database
+    from datetime import datetime, timezone
+
+    ticker_upper = ticker.strip().upper()
     try:
-        from database import get_market_data
-        md = get_market_data(ticker.upper())
+        md = database.get_market_data(ticker_upper)
         if md and md.get('last_price') and float(md['last_price']) > 0:
-            return float(md['last_price'])
-    except Exception:
-        pass
+            updated_at = md.get('updated_at')
+            if is_market_hours(ticker_upper):
+                if is_price_recent(updated_at, max_age_seconds=Config.MAX_PRICE_AGE_SECONDS):
+                    return float(md['last_price'])
+                else:
+                    logger.info(f"Market data cache for {ticker_upper} is stale ({updated_at}). Falling back to live fetch.")
+            else:
+                return float(md['last_price'])
+    except Exception as e:
+        logger.warning(f"Error reading market data cache for {ticker_upper}: {e}")
 
     try:
-        stock = yf.Ticker(ticker.upper())
+        stock = yf.Ticker(ticker_upper)
         data = stock.history(period='1d')
-        if not data.empty:
-            return float(data['Close'].iloc[-1])
-        return 0.0
+        if not data.empty and 'Close' in data.columns and not data['Close'].empty:
+            price = float(data['Close'].iloc[-1])
+            if price > 0:
+                try:
+                    database.save_market_data({
+                        'symbol': ticker_upper,
+                        'last_price': price,
+                        'open_price': float(data['Open'].iloc[-1]) if 'Open' in data.columns else price,
+                        'high_price': float(data['High'].iloc[-1]) if 'High' in data.columns else price,
+                        'low_price': float(data['Low'].iloc[-1]) if 'Low' in data.columns else price,
+                        'prev_close': price,
+                        'volume': int(data['Volume'].iloc[-1]) if 'Volume' in data.columns else 0,
+                        'change_pct': 0.0,
+                        'last_trade_time': datetime.now(timezone.utc).isoformat()
+                    })
+                except Exception:
+                    pass
+                return price
+        return None
     except Exception as e:
-        print(f"Error fetching price for {ticker}: {e}")
-        return 0.0
+        logger.error(f"Error fetching live price for {ticker_upper}: {e}")
+        return None
 
 def execute_trade(user_id: int, ticker: str, action: str, shares: float, sentiment_score=None, sentiment_label=None):
     """
@@ -49,8 +82,8 @@ def execute_trade(user_id: int, ticker: str, action: str, shares: float, sentime
         return {"success": False, "message": "Shares must be greater than zero."}
 
     price = get_current_price(ticker)
-    if price <= 0:
-        return {"success": False, "message": f"Could not fetch current price for {ticker}."}
+    if price is None or price <= 0:
+        return {"success": False, "status_code": 503, "message": "Price unavailable"}
 
     result = execute_trade_atomic(
         user_id=user_id,

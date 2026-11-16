@@ -746,7 +746,8 @@ def make_trade():
     if result['success']:
         return jsonify(result), 200
     else:
-        return error_response(result['message'], 400)
+        status_code = result.get('status_code', 400)
+        return error_response(result['message'], status_code)
 
 @app.route('/api/portfolio', methods=['GET'])
 @jwt_required()
@@ -1456,10 +1457,15 @@ def place_order():
         return error_response("Duplicate order detected. Please wait a moment before resubmitting.", 409)
 
     # Determine reference price for execution/validation
-    md = database.get_market_data(symbol)
-    market_price = float(md.get('last_price')) if (md and md.get('last_price')) else None
-    if not market_price or market_price <= 0:
+    if order_type == 'MARKET':
         market_price = trading_engine.get_current_price(symbol)
+        if market_price is None or market_price <= 0:
+            return error_response("Price unavailable", 503)
+    else:
+        md = database.get_market_data(symbol)
+        market_price = float(md.get('last_price')) if (md and md.get('last_price')) else None
+        if not market_price or market_price <= 0:
+            market_price = trading_engine.get_current_price(symbol)
 
     validation_price = market_price if order_type == 'MARKET' else (limit_price or market_price)
     if not validation_price or validation_price <= 0:

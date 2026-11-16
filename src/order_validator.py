@@ -8,7 +8,7 @@ import math
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, time as dt_time
 from typing import Any, Dict, Optional, Tuple
 
 TICKER_PATTERN = re.compile(r"^[A-Za-z0-9.\-_]{1,20}$")
@@ -157,8 +157,32 @@ def validate_order_input(data: Dict[str, Any]) -> Tuple[bool, Optional[str], Opt
     return True, None, sanitized
 
 
-def is_price_recent(updated_at_str: Optional[str], max_age_hours: float = 72.0) -> bool:
-    """Return True if price timestamp is within max_age_hours, False if stale."""
+def is_market_hours(symbol: str) -> bool:
+    """Check if the market is currently open for the given symbol."""
+    symbol = symbol.upper()
+    now_utc = datetime.now(timezone.utc)
+    # Indian market: NSE/BSE (UTC+5:30)
+    if symbol.endswith(".NS") or symbol.endswith(".BO"):
+        ist_now = now_utc + timedelta(hours=5, minutes=30)
+        if ist_now.weekday() >= 5:  # Saturday / Sunday
+            return False
+        t = ist_now.time()
+        return dt_time(9, 15) <= t <= dt_time(15, 30)
+    else:
+        # Default US markets (EST/EDT, 09:30 to 16:00)
+        try:
+            import zoneinfo
+            et_now = now_utc.astimezone(zoneinfo.ZoneInfo("America/New_York"))
+        except Exception:
+            et_now = now_utc - timedelta(hours=5)
+        if et_now.weekday() >= 5:
+            return False
+        t = et_now.time()
+        return dt_time(9, 30) <= t <= dt_time(16, 0)
+
+
+def is_price_recent(updated_at_str: Optional[str], max_age_seconds: Optional[float] = None, max_age_hours: float = 72.0) -> bool:
+    """Return True if price timestamp is within max_age_seconds (or max_age_hours), False if stale."""
     if not updated_at_str:
         return False
     try:
@@ -167,6 +191,7 @@ def is_price_recent(updated_at_str: Optional[str], max_age_hours: float = 72.0) 
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         age = datetime.now(timezone.utc) - dt
-        return age.total_seconds() <= (max_age_hours * 3600)
+        limit = max_age_seconds if max_age_seconds is not None else (max_age_hours * 3600)
+        return age.total_seconds() <= limit
     except Exception:
         return False

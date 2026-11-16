@@ -50,6 +50,9 @@ class Config:
     # Rate Limiting Storage URI
     RATELIMIT_STORAGE_URI = os.getenv("RATELIMIT_STORAGE_URI", "memory://")
 
+    # Max price age for market data before considered stale (in seconds, default 15 min = 900s)
+    MAX_PRICE_AGE_SECONDS = int(os.getenv("MAX_PRICE_AGE_SECONDS", "900"))
+
     # NewsAPI key should be set in .env as: NEWS_API_KEY=your_key_here
     NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 

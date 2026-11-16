@@ -403,6 +403,68 @@ class TestPhaseE1OrderHardening(unittest.TestCase):
             self.assertTrue(cancel_res)
             self.assertEqual(database.get_user_shares(self.user_id, "IOCRACE"), 0.0)
 
+    def test_b8_stale_price_market_order_rejected_when_live_fetch_fails(self):
+        """Stale cached price during market hours triggers 503 Price unavailable if yfinance fails."""
+        from unittest.mock import patch as mock_patch
+        from datetime import datetime, timezone, timedelta
+        import pandas as pd
+        import trading_engine
+
+        stale_time = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        database.upsert_market_cache({
+            "symbol": "STALESTK",
+            "last_price": 100.0,
+            "updated_at": stale_time
+        })
+
+        with mock_patch("order_validator.is_market_hours", return_value=True):
+            with mock_patch("yfinance.Ticker") as mock_ticker:
+                mock_ticker.return_value.history.return_value = pd.DataFrame()
+                price = trading_engine.get_current_price("STALESTK")
+                self.assertIsNone(price)
+
+                # Test /api/orders MARKET order returns 503
+                res = self.client.post("/api/orders", json={
+                    "symbol": "STALESTK",
+                    "side": "BUY",
+                    "order_type": "MARKET",
+                    "quantity": 1.0
+                }, headers=self.headers)
+                self.assertEqual(res.status_code, 503)
+                self.assertIn("Price unavailable", res.get_json()["message"])
+
+                database.upsert_market_cache({
+                    "symbol": "STALESTK2",
+                    "last_price": 100.0,
+                    "updated_at": stale_time
+                })
+                # Test /api/trade returns 503
+                res_trade = self.client.post("/api/trade", json={
+                    "ticker": "STALESTK2",
+                    "action": "BUY",
+                    "shares": 1.0
+                }, headers=self.headers)
+                self.assertEqual(res_trade.status_code, 503)
+                self.assertIn("Price unavailable", res_trade.get_json()["message"])
+
+    def test_b9_fresh_price_market_order_accepted(self):
+        """Fresh cached price is accepted for market order."""
+        from datetime import datetime, timezone
+        fresh_time = datetime.now(timezone.utc).isoformat()
+        database.upsert_market_cache({
+            "symbol": "FRESHSTK",
+            "last_price": 50.0,
+            "updated_at": fresh_time
+        })
+        res = self.client.post("/api/orders", json={
+            "symbol": "FRESHSTK",
+            "side": "BUY",
+            "order_type": "MARKET",
+            "quantity": 2.0
+        }, headers=self.headers)
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(database.get_user_shares(self.user_id, "FRESHSTK"), 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

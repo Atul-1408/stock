@@ -1587,7 +1587,7 @@ def get_all_sectors() -> List[str]:
 # --- Market Data Cache ---
 def upsert_market_cache(data: Dict) -> None:
     """Insert or update market data cache for a symbol."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = data.get('updated_at') or datetime.now(timezone.utc).isoformat()
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
