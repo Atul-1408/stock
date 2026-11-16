@@ -52,8 +52,11 @@ stock/
 
 ### Prerequisites
 - Node.js (v18 or higher)
-- Python 3.10+
-- An API key from [NewsAPI.org](https://newsapi.org/)
+- Python 3.10+ (Tested up to Python 3.14)
+- API Keys:
+  - [NewsAPI.org](https://newsapi.org/) (`NEWS_API_KEY`)
+  - [Finnhub.io](https://finnhub.io/) (`FINNHUB_API_KEY`)
+  - [Google AI Studio](https://aistudio.google.com/) (`GEMINI_API_KEY`)
 
 ### Installation & Setup
 
@@ -64,21 +67,37 @@ stock/
    ```
 
 2. **Backend Setup:**
-   - Create a virtual environment and attach it:
+   - Create a virtual environment:
      ```bash
      python -m venv venv
-     source venv/bin/activate  # On Windows: venv\\Scripts\\activate
      ```
-   - Install required packages:
+   - Activate the virtual environment:
+     - **Windows PowerShell:**
+       ```powershell
+       .\venv\Scripts\Activate.ps1
+       # If execution policy blocks script: Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+       ```
+     - **Windows CMD:**
+       ```cmd
+       venv\Scripts\activate.bat
+       ```
+     - **Linux / macOS:**
+       ```bash
+       source venv/bin/activate
+       ```
+   - Install required dependencies:
      ```bash
-     pip install -r requirements.txt  # (if applicable, or install via pyproject.toml)
+     pip install -r requirements.txt
      ```
    - Configure Environment Variables:
-     Copy the `.env.example` file to `.env` and provide your keys:
      ```bash
      cp .env.example .env
      ```
-     Edit `.env` to add your `NEWS_API_KEY`.
+     Open `.env` and set your `JWT_SECRET_KEY`, `NEWS_API_KEY`, `FINNHUB_API_KEY`, and `GEMINI_API_KEY`.
+   - Windows Console Unicode Support (Optional but recommended):
+     ```powershell
+     $env:PYTHONUTF8=1
+     ```
 
 3. **Frontend Setup:**
    ```bash
@@ -88,19 +107,19 @@ stock/
 
 ### Running the Application
 
-1. **Start the Backend:**
+1. **Start the Backend (Terminal 1):**
    ```bash
-   # From the project root with your virtualenv activated
+   # From the project root with your virtual environment active
    python src/app.py
    ```
-   The API should start on `http://localhost:5000` (or the port defined in `app.py`).
+   The API will listen on `http://127.0.0.1:5000` (or configured port).
 
-2. **Start the Frontend:**
+2. **Start the Frontend (Terminal 2):**
    ```bash
    cd frontend
    npm run dev
    ```
-   The React application will be accessible at `http://localhost:5173`.
+   The institutional trading dashboard will be available at `http://127.0.0.1:5173/dashboard`.
 
 ## License
 

@@ -3,7 +3,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import yfinance as yf
 import database
-from trading_engine import get_current_price
+import trading_engine
 
 def get_historical_price(ticker: str, date: datetime) -> float:
     """Get the closing price for a ticker on a specific historical date."""
@@ -20,74 +20,199 @@ def get_historical_price(ticker: str, date: datetime) -> float:
         print(f"Error fetching historical price for {ticker}: {e}")
         return 0.0
 
-def calculate_portfolio_performance(user_id):
-    """Calculate comprehensive portfolio metrics using WAC basis and realized P&L."""
-    transactions = database.get_transactions_by_user(user_id, limit=9999)
-    portfolio = database.get_user_portfolio(user_id)
-    
-    # Calculate current market value and active invested capital from portfolio holdings
-    total_value = 0.0
-    active_invested = 0.0
-    for holding in portfolio:
-        current_price = get_current_price(holding['ticker'])
-        if current_price <= 0:
-            current_price = float(holding.get('avg_buy_price', 0))
-        shares = float(holding.get('shares', 0))
-        total_value += shares * current_price
-        active_invested += float(holding.get('total_invested', 0))
+def _compute_trade_stats(trades):
+    """Calculates win rate, profit factor, average profit/loss for a list of closed trades."""
+    if not trades:
+        return {
+            'total_trades': 0,
+            'winning_trades': 0,
+            'losing_trades': 0,
+            'breakeven_trades': 0,
+            'win_rate': None,
+            'total_pnl': 0.0,
+            'avg_profit': None,
+            'avg_loss': None,
+            'profit_factor': None,
+            'closed_cost_basis': 0.0,
+            'realized_return_pct': None
+        }
 
-    # Realized P&L from closed trades
-    closed_trades = database.get_closed_trades(user_id)
-    realized_pnl = sum(float(t.get('pnl', 0.0)) for t in closed_trades)
-    
-    # Unrealized P&L from active positions
-    unrealized_pnl = total_value - active_invested
-    
-    # Total P&L combines realized gains/losses and unrealized paper gains/losses
-    total_pnl = realized_pnl + unrealized_pnl
+    total_trades = len(trades)
+    winning_trades = len([t for t in trades if float(t.get('pnl', 0.0) or 0.0) > 0])
+    losing_trades = len([t for t in trades if float(t.get('pnl', 0.0) or 0.0) < 0])
+    breakeven_trades = len([t for t in trades if float(t.get('pnl', 0.0) or 0.0) == 0])
 
-    # Total capital basis: active invested capital, or starting balance benchmark if zero active holdings
-    basis = active_invested if active_invested > 0 else (database.get_starting_balance(user_id) or 100000.0)
-    total_pnl_pct = (total_pnl / basis * 100) if basis > 0 else 0.0
-    
-    # Win Rate from closed trades
-    winning_trades = len([t for t in closed_trades if (t.get('pnl') or 0) > 0])
-    losing_trades = len([t for t in closed_trades if (t.get('pnl') or 0) <= 0])
-    total_trades = len(closed_trades)
-    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
-    
-    if closed_trades:
-        best_trade = max(closed_trades, key=lambda x: x.get('pnl_pct', 0.0))
-        worst_trade = min(closed_trades, key=lambda x: x.get('pnl_pct', 0.0))
+    win_rate = round((winning_trades / total_trades * 100), 2) if total_trades > 0 else None
+    total_pnl = round(sum(float(t.get('pnl', 0.0) or 0.0) for t in trades), 2)
+
+    profits = [float(t.get('pnl', 0.0) or 0.0) for t in trades if float(t.get('pnl', 0.0) or 0.0) > 0]
+    losses = [float(t.get('pnl', 0.0) or 0.0) for t in trades if float(t.get('pnl', 0.0) or 0.0) < 0]
+
+    avg_profit = round(sum(profits) / len(profits), 2) if profits else None
+    avg_loss = round(sum(losses) / len(losses), 2) if losses else None
+
+    abs_losses = abs(sum(losses))
+    if abs_losses > 0:
+        profit_factor = round(sum(profits) / abs_losses, 2)
+    elif profits:
+        profit_factor = float('inf')
     else:
-        best_trade = worst_trade = None
-    
-    # Risk Metrics
-    daily_returns = calculate_daily_returns(user_id)
-    sharpe_ratio = 0.0
-    volatility = 0.0
-    if len(daily_returns) > 1:
-        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() > 0 else 0.0
-        volatility = daily_returns.std() * np.sqrt(252)
-    
-    max_drawdown = calculate_max_drawdown(user_id)
-    
+        profit_factor = None
+
+    closed_cost_basis = round(sum(float(t.get('cost_basis', 0.0) or 0.0) for t in trades), 2)
+    realized_return_pct = round((total_pnl / closed_cost_basis * 100), 2) if closed_cost_basis > 0 else None
+
     return {
-        'total_value': round(total_value, 2),
-        'total_invested': round(active_invested, 2),
-        'realized_pnl': round(realized_pnl, 2),
-        'unrealized_pnl': round(unrealized_pnl, 2),
-        'total_pnl': round(total_pnl, 2),
-        'total_pnl_pct': round(total_pnl_pct, 2),
-        'win_rate': round(win_rate, 2),
         'total_trades': total_trades,
         'winning_trades': winning_trades,
         'losing_trades': losing_trades,
+        'breakeven_trades': breakeven_trades,
+        'win_rate': win_rate,
+        'total_pnl': total_pnl,
+        'avg_profit': avg_profit,
+        'avg_loss': avg_loss,
+        'profit_factor': profit_factor,
+        'closed_cost_basis': closed_cost_basis,
+        'realized_return_pct': realized_return_pct
+    }
+
+
+def calculate_portfolio_performance(user_id):
+    """Calculate comprehensive portfolio metrics using WAC basis, realized P&L, and bot/manual separation."""
+    portfolio = database.get_user_portfolio(user_id)
+    
+    # 1. Holdings valuation and price integrity
+    active_invested = 0.0
+    known_market_value = 0.0
+    known_unrealized_pnl = 0.0
+    unpriced_tickers = []
+
+    for holding in portfolio:
+        ticker = holding['ticker']
+        shares = float(holding.get('shares', 0) or 0)
+        invested = float(holding.get('total_invested', 0) or 0)
+        active_invested += invested
+
+        current_price = trading_engine.get_current_price(ticker)
+        if current_price and current_price > 0:
+            mv = shares * current_price
+            known_market_value += mv
+            known_unrealized_pnl += (mv - invested)
+        else:
+            unpriced_tickers.append(ticker)
+
+    all_prices_available = (len(unpriced_tickers) == 0)
+    total_value = round(known_market_value, 2) if all_prices_available else None
+    unrealized_pnl = round(known_unrealized_pnl, 2) if all_prices_available else None
+
+    # 2. Realized P&L from closed trades
+    closed_trades = database.get_closed_trades(user_id)
+    overall_stats = _compute_trade_stats(closed_trades)
+    realized_pnl = overall_stats['total_pnl']
+    closed_cost_basis = overall_stats['closed_cost_basis']
+
+    # Separate bot vs manual performance
+    bot_closed_trades = [t for t in closed_trades if t.get('is_bot') == 1]
+    manual_closed_trades = [t for t in closed_trades if t.get('is_bot') == 0]
+    unattributed_trades = [t for t in closed_trades if t.get('is_bot') is None]
+
+    bot_stats = _compute_trade_stats(bot_closed_trades)
+    manual_stats = _compute_trade_stats(manual_closed_trades)
+    unattributed_stats = _compute_trade_stats(unattributed_trades)
+
+    # 3. Total Combined P&L
+    if unrealized_pnl is not None:
+        total_pnl = round(realized_pnl + unrealized_pnl, 2)
+    else:
+        total_pnl = None
+
+    # 4. Cash Balances and Buying Power
+    cash_balance = float(database.get_user_balance(user_id) or 0.0)
+    reserved_cash = float(database.get_user_reserved_cash(user_id) or 0.0)
+    buying_power = float(database.get_user_buying_power(user_id) or 0.0)
+    starting_balance = float(database.get_starting_balance(user_id) or 0.0)
+    portfolio_equity = round(cash_balance + known_market_value, 2) if all_prices_available else None
+
+    # 5. Returns with explicitly documented denominators
+    # Unrealized return on active open capital
+    unrealized_return_pct = (
+        round((unrealized_pnl / active_invested * 100), 2)
+        if (active_invested > 0 and unrealized_pnl is not None)
+        else None
+    )
+    # Realized return on closed capital basis
+    realized_return_pct = overall_stats['realized_return_pct']
+    
+    # Return on starting deposit
+    return_on_starting_capital_pct = (
+        round((total_pnl / starting_balance * 100), 2)
+        if (starting_balance > 0 and total_pnl is not None)
+        else None
+    )
+    
+    # Backwards-compatible total_pnl_pct
+    total_pnl_pct = return_on_starting_capital_pct if return_on_starting_capital_pct is not None else 0.0
+
+    # Best / Worst Trade
+    if closed_trades:
+        best_trade = max(closed_trades, key=lambda x: float(x.get('pnl', 0.0) or 0.0))
+        worst_trade = min(closed_trades, key=lambda x: float(x.get('pnl', 0.0) or 0.0))
+    else:
+        best_trade = worst_trade = None
+
+    # 6. Risk metrics safely guarded
+    sharpe_ratio = 0.0
+    volatility = 0.0
+    try:
+        daily_returns = calculate_daily_returns(user_id)
+        if len(daily_returns) > 1 and daily_returns.std() > 0:
+            sharpe_ratio = float((daily_returns.mean() / daily_returns.std()) * np.sqrt(252))
+            volatility = float(daily_returns.std() * np.sqrt(252))
+    except Exception:
+        pass
+
+    max_drawdown = 0.0
+    try:
+        max_drawdown = float(calculate_max_drawdown(user_id))
+    except Exception:
+        pass
+
+    return {
+        'total_value': total_value,
+        'known_market_value': round(known_market_value, 2),
+        'total_invested': round(active_invested, 2),
+        'cash_balance': round(cash_balance, 2),
+        'reserved_cash': round(reserved_cash, 2),
+        'buying_power': round(buying_power, 2),
+        'starting_balance': round(starting_balance, 2),
+        'portfolio_equity': portfolio_equity,
+        'realized_pnl': round(realized_pnl, 2),
+        'unrealized_pnl': unrealized_pnl,
+        'known_unrealized_pnl': round(known_unrealized_pnl, 2),
+        'total_pnl': total_pnl,
+        'total_pnl_pct': round(total_pnl_pct, 2),
+        'unrealized_return_pct': unrealized_return_pct,
+        'realized_return_pct': realized_return_pct,
+        'return_on_starting_capital_pct': return_on_starting_capital_pct,
+        'all_prices_available': all_prices_available,
+        'unpriced_tickers': unpriced_tickers,
+        'win_rate': overall_stats['win_rate'] if overall_stats['win_rate'] is not None else 0.0,
+        'win_rate_raw': overall_stats['win_rate'],
+        'total_trades': overall_stats['total_trades'],
+        'winning_trades': overall_stats['winning_trades'],
+        'losing_trades': overall_stats['losing_trades'],
+        'breakeven_trades': overall_stats['breakeven_trades'],
+        'avg_profit': overall_stats['avg_profit'] if overall_stats['avg_profit'] is not None else 0.0,
+        'avg_loss': overall_stats['avg_loss'] if overall_stats['avg_loss'] is not None else 0.0,
+        'profit_factor': overall_stats['profit_factor'],
         'best_trade': best_trade,
         'worst_trade': worst_trade,
-        'sharpe_ratio': round(sharpe_ratio, 2),
-        'volatility': round(volatility * 100, 2),
-        'max_drawdown': round(max_drawdown * 100, 2)
+        'bot_performance': bot_stats,
+        'manual_performance': manual_stats,
+        'unattributed_performance': unattributed_stats,
+        'sharpe_ratio': round(sharpe_ratio, 2) if sharpe_ratio else 0.0,
+        'volatility': round(volatility * 100, 2) if volatility else 0.0,
+        'max_drawdown': round(max_drawdown * 100, 2) if max_drawdown else 0.0
     }
 
 def get_portfolio_history(user_id, days=30):
@@ -144,8 +269,11 @@ def calculate_portfolio_value_on_date(user_id, date):
     p_value = cash
     for ticker, shares in holdings.items():
         price = get_historical_price(ticker, date)
-        p_value += shares * price
-    return p_value
+        if price <= 0:
+            price = trading_engine.get_current_price(ticker)
+        if price and price > 0:
+            p_value += shares * price
+    return round(p_value, 2)
 
 def get_benchmark_performance(start_date, end_date, starting_value):
     """S&P 500 comparison."""
@@ -185,7 +313,7 @@ def get_sector_allocation(user_id):
     sectors = {}
     total_val = 0
     for h in portfolio:
-        price = get_current_price(h['ticker'])
+        price = trading_engine.get_current_price(h['ticker'])
         val = h['shares'] * price
         total_val += val
         sector = get_stock_sector(h['ticker'])

@@ -81,39 +81,223 @@ def execute_trade(user_id: int, ticker: str, action: str, shares: float, sentime
     }
 
 def get_portfolio_summary(user_id: int):
-    """Fetch user portfolio with live P&L calculation."""
+    """Fetch user portfolio with live P&L calculation and strict price availability handling."""
+    from database import (
+        get_user_portfolio,
+        get_user_buying_power,
+        get_user_reserved_cash,
+        get_user_reserved_shares,
+        get_user_balance,
+        get_closed_trades,
+    )
+
     portfolio = get_user_portfolio(user_id)
     summary = []
-    total_market_value = 0
-    total_pnl = 0
-    
+    total_invested_sum = 0.0
+
     for holding in portfolio:
         ticker = holding['ticker']
-        shares = holding['shares']
-        avg_price = holding['avg_buy_price']
-        total_invested = holding['total_invested']
-        
+        shares = float(holding['shares'])
+        avg_price = float(holding['avg_buy_price'])
+        total_invested = float(holding['total_invested'])
+        total_invested_sum += total_invested
+
+        reserved_shares = get_user_reserved_shares(user_id, ticker)
+        available_shares = max(0.0, round(shares - reserved_shares, 6))
+
         current_price = get_current_price(ticker)
-        market_value = shares * current_price
-        pnl = market_value - total_invested
-        pnl_percent = (pnl / total_invested * 100) if total_invested > 0 else 0
-        
+        if current_price and current_price > 0:
+            market_value = round(shares * current_price, 2)
+            pnl = round(market_value - total_invested, 2)
+            pnl_percent = round((pnl / total_invested * 100), 2) if total_invested > 0 else 0.0
+            price_available = True
+        else:
+            current_price = None
+            market_value = None
+            pnl = None
+            pnl_percent = None
+            price_available = False
+
         summary.append({
             "ticker": ticker,
             "shares": shares,
+            "reserved_shares": reserved_shares,
+            "available_shares": available_shares,
             "avg_price": avg_price,
             "current_price": current_price,
             "total_invested": total_invested,
             "market_value": market_value,
             "pnl": pnl,
-            "pnl_percent": pnl_percent
+            "pnl_percent": pnl_percent,
+            "price_available": price_available
         })
-        
-        total_market_value += market_value
-        total_pnl += pnl
-        
+
+    all_prices_available = all(h["price_available"] for h in summary)
+    known_market_value = round(sum(h["market_value"] for h in summary if h["price_available"]), 2)
+    known_pnl = round(sum(h["pnl"] for h in summary if h["price_available"]), 2)
+
+    total_market_value = known_market_value if all_prices_available else None
+    total_pnl = known_pnl if all_prices_available else None
+
+    # Compute available cash, buying power, and pending reservations
+    try:
+        cash_balance = float(get_user_balance(user_id) or 0.0)
+        buying_power = float(get_user_buying_power(user_id) or 0.0)
+        reserved_cash = float(get_user_reserved_cash(user_id) or 0.0)
+        closed_trades = get_closed_trades(user_id)
+        realized_pnl = round(sum(float(t.get('pnl', 0.0)) for t in closed_trades), 2)
+    except Exception:
+        cash_balance = 0.0
+        buying_power = 0.0
+        reserved_cash = 0.0
+        realized_pnl = 0.0
+
+    total_equity = round(cash_balance + known_market_value, 2) if all_prices_available else None
+
     return {
         "holdings": summary,
+        "total_invested": round(total_invested_sum, 2),
         "total_market_value": total_market_value,
-        "total_pnl": total_pnl
+        "total_pnl": total_pnl,
+        "known_market_value": known_market_value,
+        "known_pnl": known_pnl,
+        "all_prices_available": all_prices_available,
+        "cash_balance": cash_balance,
+        "buying_power": buying_power,
+        "reserved_cash": reserved_cash,
+        "total_equity": total_equity,
+        "realized_pnl": realized_pnl
+    }
+
+
+def match_pending_orders(symbol: str = None):
+    """
+    Evaluates all OPEN limit orders against verified current market prices.
+    Executes trades only when price conditions are met:
+    - BUY Limit: market_price <= limit_price
+    - SELL Limit: market_price >= limit_price
+
+    Price integrity guarantees:
+    - Uses get_current_price() abstraction.
+    - If market price is unavailable (<= 0), execution is deferred. Never fabricates prices.
+    - If cash/shares are insufficient at execution time, order is rejected.
+    - Uses fill_order_atomic() for atomic execution and WAC ledger integrity.
+    - Prevents double fills via atomic status checks.
+    """
+    from database import get_open_orders, fill_order_atomic, expire_stale_orders
+
+    try:
+        expire_stale_orders()
+    except Exception:
+        pass
+
+    open_orders = get_open_orders(symbol=symbol)
+    fills = []
+
+    for order in open_orders:
+        order_id = order['id']
+        sym = order['symbol']
+        side = order['side'].upper()
+        order_type = order['order_type'].upper()
+        limit_price = float(order['price']) if order['price'] is not None else 0.0
+
+        if order_type != 'LIMIT':
+            continue
+
+        if limit_price <= 0:
+            continue
+
+        current_price = get_current_price(sym)
+        if current_price <= 0:
+            # Missing or invalid market data; defer execution without fabricating prices
+            continue
+
+        should_fill = False
+        if side == 'BUY' and current_price <= limit_price:
+            should_fill = True
+        elif side == 'SELL' and current_price >= limit_price:
+            should_fill = True
+
+        if should_fill:
+            res = fill_order_atomic(order_id=order_id, execution_price=current_price)
+            if res.get("success"):
+                fills.append(res)
+
+    return fills
+
+
+def match_single_order(order_id: int):
+    """
+    Evaluates and attempts immediate execution of a single open order against current market price.
+    Returns: Dict containing execution result or failure reason.
+    """
+    from database import get_connection, fill_order_atomic
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
+        order = cursor.fetchone()
+        if not order or order['status'] != 'OPEN':
+            return {"success": False, "message": "Order is not OPEN."}
+
+        sym = order['symbol']
+        side = order['side'].upper()
+        order_type = order['order_type'].upper()
+        limit_price = float(order['price']) if order['price'] is not None else 0.0
+
+        current_price = get_current_price(sym)
+        if current_price <= 0:
+            return {"success": False, "message": f"Could not obtain valid market price for {sym}."}
+
+        should_fill = False
+        if order_type == 'MARKET':
+            should_fill = True
+        elif order_type == 'LIMIT':
+            if limit_price <= 0:
+                return {"success": False, "message": "Limit price must be greater than zero."}
+            if side == 'BUY' and current_price <= limit_price:
+                should_fill = True
+            elif side == 'SELL' and current_price >= limit_price:
+                should_fill = True
+
+        if not should_fill:
+            return {
+                "success": False,
+                "message": f"Price condition not met. Market price: ${current_price:,.2f}, Limit: ${limit_price:,.2f}"
+            }
+
+        return fill_order_atomic(order_id=order_id, execution_price=current_price)
+    finally:
+        conn.close()
+
+
+def process_ioc_order(order_id: int):
+    """
+    Executes immediate-or-cancel (IOC) semantics:
+    1. Immediately attempts execution against live market price.
+    2. If condition is met, order is filled atomically.
+    3. If execution cannot proceed or condition is not met, immediately cancels the order,
+       instantly releasing reserved buying power or reserved shares.
+    4. Since partial fills are not supported by the order book, the entire unfilled quantity is cancelled.
+    Returns: Dict summarizing outcome and final order status.
+    """
+    from database import cancel_order, get_connection
+
+    match_res = match_single_order(order_id)
+    if match_res.get("success"):
+        return {
+            "status": "FILLED",
+            "filled": True,
+            "order_id": order_id,
+            "data": match_res
+        }
+
+    # Cancel unfilled order immediately to release reservations
+    cancelled = cancel_order(order_id)
+    return {
+        "status": "CANCELLED",
+        "filled": False,
+        "order_id": order_id,
+        "reason": match_res.get("message", "IOC condition not satisfied immediately.")
     }

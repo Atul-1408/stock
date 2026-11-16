@@ -158,34 +158,142 @@ export default function AnalyticsDashboard() {
 
   return (
     <div className="space-y-4 font-mono">
-      {/* ── 1. Top KPI Row ── */}
+      {/* ── 1. Top KPI Rows: Portfolio Equity, Cash, and P&L Segregation ── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <MetricTile
-          title="TOTAL NET ASSETS"
-          value={formatCurrency(analytics?.total_value || 0, currency)}
-          subText={`Invested: ${formatCurrency(analytics?.total_invested || 0, currency)}`}
-          badge="PORTFOLIO"
+          title="PORTFOLIO EQUITY"
+          value={
+            analytics?.portfolio_equity != null
+              ? formatCurrency(analytics.portfolio_equity, currency)
+              : formatCurrency(
+                  (analytics?.cash_balance || 0) + (analytics?.known_market_value || 0),
+                  currency
+                )
+          }
+          subText={`Holdings: ${
+            analytics?.total_value != null
+              ? formatCurrency(analytics.total_value, currency)
+              : analytics?.known_market_value != null
+              ? `${formatCurrency(analytics.known_market_value, currency)} (Partial)`
+              : "Unavailable"
+          }`}
+          badge="NET ASSETS"
         />
+
         <MetricTile
-          title="TOTAL REALIZED / UNREALIZED"
-          value={formatCurrency(analytics?.total_pnl || 0, currency)}
-          delta={`${analytics?.total_pnl_pct || 0}%`}
+          title="CASH & BUYING POWER"
+          value={formatCurrency(analytics?.buying_power || 0, currency)}
+          subText={`Cash: ${formatCurrency(analytics?.cash_balance || 0, currency)} | Rsv: ${formatCurrency(
+            analytics?.reserved_cash || 0,
+            currency
+          )}`}
+          badge="LIQUIDITY"
+        />
+
+        <MetricTile
+          title="UNREALIZED P&L"
+          value={
+            analytics?.unrealized_pnl != null
+              ? `${analytics.unrealized_pnl >= 0 ? "+" : ""}${formatCurrency(
+                  analytics.unrealized_pnl,
+                  currency
+                )}`
+              : "Unavailable"
+          }
+          delta={
+            analytics?.unrealized_return_pct != null
+              ? `${analytics.unrealized_return_pct >= 0 ? "+" : ""}${analytics.unrealized_return_pct}%`
+              : null
+          }
+          isPositive={(analytics?.unrealized_pnl || 0) >= 0}
+          subText={`Active Cost: ${formatCurrency(analytics?.total_invested || 0, currency)}`}
+          badge="OPEN"
+        />
+
+        <MetricTile
+          title="REALIZED P&L"
+          value={`${(analytics?.realized_pnl || 0) >= 0 ? "+" : ""}${formatCurrency(
+            analytics?.realized_pnl || 0,
+            currency
+          )}`}
+          delta={
+            analytics?.realized_return_pct != null
+              ? `${analytics.realized_return_pct >= 0 ? "+" : ""}${analytics.realized_return_pct}%`
+              : null
+          }
+          isPositive={(analytics?.realized_pnl || 0) >= 0}
+          subText={`Closed Cost: ${formatCurrency(
+            analytics?.closed_cost_basis || 0,
+            currency
+          )}`}
+          badge="CLOSED"
+        />
+      </div>
+
+      {/* ── 1b. Secondary KPI Row: Win Rate & Bot vs Manual Attribution ── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <MetricTile
+          title="TOTAL COMBINED P&L"
+          value={
+            analytics?.total_pnl != null
+              ? `${analytics.total_pnl >= 0 ? "+" : ""}${formatCurrency(
+                  analytics.total_pnl,
+                  currency
+                )}`
+              : "Unavailable"
+          }
+          delta={
+            analytics?.total_pnl_pct != null
+              ? `${analytics.total_pnl_pct >= 0 ? "+" : ""}${analytics.total_pnl_pct}%`
+              : null
+          }
           isPositive={(analytics?.total_pnl || 0) >= 0}
-          badge="ALL-TIME"
+          subText={`Deposit: ${formatCurrency(analytics?.starting_balance || 0, currency)}`}
+          badge="COMBINED"
         />
+
         <MetricTile
-          title="SIGNAL WIN RATE"
-          value={`${analytics?.win_rate || 0}%`}
-          subText={`${analytics?.winning_trades || 0} Wins / ${analytics?.losing_trades || 0} Losses`}
+          title="WIN RATE (CLOSED)"
+          value={
+            analytics?.win_rate_raw != null
+              ? `${analytics.win_rate_raw}%`
+              : "N/A"
+          }
+          subText={`${analytics?.winning_trades || 0} Wins / ${analytics?.losing_trades || 0} Losses / ${
+            analytics?.breakeven_trades || 0
+          } Even`}
           isPositive={(analytics?.win_rate || 0) >= 50}
           badge="ACCURACY"
         />
+
         <MetricTile
-          title="SHARPE RATIO"
-          value={Number(analytics?.sharpe_ratio || 0).toFixed(2)}
-          subText={`Volatility: ${Number(analytics?.volatility || 0).toFixed(1)}%`}
-          isPositive={(analytics?.sharpe_ratio || 0) >= 1.0}
-          badge="RISK-ADJ"
+          title="BOT PERFORMANCE"
+          value={`${(analytics?.bot_performance?.total_pnl || 0) >= 0 ? "+" : ""}${formatCurrency(
+            analytics?.bot_performance?.total_pnl || 0,
+            currency
+          )}`}
+          subText={`${analytics?.bot_performance?.total_trades || 0} Trades | Win: ${
+            analytics?.bot_performance?.win_rate != null
+              ? `${analytics.bot_performance.win_rate}%`
+              : "N/A"
+          }`}
+          isPositive={(analytics?.bot_performance?.total_pnl || 0) >= 0}
+          badge="BOT"
+        />
+
+        <MetricTile
+          title="MANUAL PERFORMANCE"
+          value={`${(analytics?.manual_performance?.total_pnl || 0) >= 0 ? "+" : ""}${formatCurrency(
+            analytics?.manual_performance?.total_pnl || 0,
+            currency
+          )}`}
+          subText={`${analytics?.manual_performance?.total_trades || 0} Trades | Win: ${
+            analytics?.manual_performance?.win_rate != null
+              ? `${analytics.manual_performance.win_rate}%`
+              : "N/A"
+          }`}
+          isPositive={(analytics?.manual_performance?.total_pnl || 0) >= 0}
+          badge="MANUAL"
         />
       </div>
 
@@ -326,25 +434,33 @@ export default function AnalyticsDashboard() {
             <div className="p-2.5 rounded bg-black/40 border border-white/5">
               <div className="text-[9px] text-slate-400 font-bold">BETA (VS SPY)</div>
               <div className="text-sm font-bold text-white mt-0.5">
-                {Number(risk?.beta || 1.05).toFixed(2)}
+                {risk?.beta != null ? Number(risk.beta).toFixed(2) : "N/A"}
               </div>
             </div>
             <div className="p-2.5 rounded bg-black/40 border border-white/5">
               <div className="text-[9px] text-slate-400 font-bold">MAX DRAWDOWN</div>
               <div className="text-sm font-bold text-coral-400 mt-0.5">
-                -{Number(risk?.max_drawdown || 4.2).toFixed(1)}%
+                {risk?.max_drawdown != null
+                  ? `-${Number(risk.max_drawdown).toFixed(1)}%`
+                  : analytics?.max_drawdown != null
+                  ? `-${Number(analytics.max_drawdown).toFixed(1)}%`
+                  : "N/A"}
               </div>
             </div>
             <div className="p-2.5 rounded bg-black/40 border border-white/5">
-              <div className="text-[9px] text-slate-400 font-bold">VaR (95% 1-DAY)</div>
+              <div className="text-[9px] text-slate-400 font-bold">SHARPE RATIO</div>
               <div className="text-sm font-bold text-slate-200 mt-0.5">
-                ${Number(risk?.var_95 || 320).toFixed(0)}
+                {analytics?.sharpe_ratio != null ? Number(analytics.sharpe_ratio).toFixed(2) : "N/A"}
               </div>
             </div>
             <div className="p-2.5 rounded bg-black/40 border border-white/5">
               <div className="text-[9px] text-slate-400 font-bold">PROFIT FACTOR</div>
               <div className="text-sm font-bold text-emerald-400 mt-0.5">
-                {Number(risk?.profit_factor || 1.84).toFixed(2)}
+                {analytics?.profit_factor === Infinity
+                  ? "∞"
+                  : analytics?.profit_factor != null
+                  ? Number(analytics.profit_factor).toFixed(2)
+                  : "N/A"}
               </div>
             </div>
           </div>
@@ -355,21 +471,40 @@ export default function AnalyticsDashboard() {
               TOP ATTRIBUTION CONTRIBUTORS
             </div>
             <div className="space-y-1">
-              {(performers?.top || [
-                { symbol: "NVDA", return_pct: 14.8, pnl: 420 },
-                { symbol: "AAPL", return_pct: 6.2, pnl: 180 },
-              ]).map((item) => (
-                <div
-                  key={item.symbol}
-                  className="flex items-center justify-between text-xs p-1.5 rounded hover:bg-white/5"
-                >
-                  <span className="font-bold text-white">{item.symbol}</span>
-                  <div className="flex gap-4">
-                    <span className="text-emerald-400 font-bold">+${Number(item.pnl).toFixed(2)}</span>
-                    <span className="text-emerald-400 font-bold">+{Number(item.return_pct).toFixed(1)}%</span>
-                  </div>
+              {(performers?.top_performers || performers?.top || []).length > 0 ? (
+                (performers?.top_performers || performers?.top).map((item) => {
+                  const sym = item.symbol || item.ticker;
+                  const isUp = (item.pnl || 0) >= 0;
+                  return (
+                    <div
+                      key={sym}
+                      className="flex items-center justify-between text-xs p-1.5 rounded hover:bg-white/5"
+                    >
+                      <span className="font-bold text-white">{sym}</span>
+                      <div className="flex gap-4">
+                        <span
+                          className={`font-bold ${
+                            isUp ? "text-emerald-400" : "text-coral-400"
+                          }`}
+                        >
+                          {isUp ? "+" : ""}${Number(item.pnl || 0).toFixed(2)}
+                        </span>
+                        <span
+                          className={`font-bold ${
+                            isUp ? "text-emerald-400" : "text-coral-400"
+                          }`}
+                        >
+                          {isUp ? "+" : ""}{Number(item.pnl_pct || item.return_pct || 0).toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-xs text-slate-500 py-2">
+                  NO ASSET ATTRIBUTION CONTRIBUTORS RECORDED
                 </div>
-              ))}
+              )}
             </div>
           </div>
         </div>

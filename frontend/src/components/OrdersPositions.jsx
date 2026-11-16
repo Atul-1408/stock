@@ -222,13 +222,17 @@ export default function OrdersPositions() {
                       <td className="py-2.5 px-3 font-bold text-white">{p.symbol}</td>
                       <td className="py-2.5 px-3 text-right text-slate-200">{Number(p.quantity).toLocaleString()}</td>
                       <td className="py-2.5 px-3 text-right text-slate-300">${Number(p.avg_price).toFixed(2)}</td>
-                      <td className="py-2.5 px-3 text-right text-slate-300">${Number(p.ltp).toFixed(2)}</td>
-                      <td className="py-2.5 px-3 text-right text-white font-bold">${Number(p.current_value).toFixed(2)}</td>
-                      <td className={`py-2.5 px-3 text-right font-bold ${pnlUp ? "text-emerald-400" : "text-coral-400"}`}>
-                        {pnlUp ? "+" : ""}${Number(p.pnl || 0).toFixed(2)}
+                      <td className="py-2.5 px-3 text-right text-slate-300">
+                        {p.ltp != null ? `$${Number(p.ltp).toFixed(2)}` : "—"}
                       </td>
-                      <td className={`py-2.5 px-3 text-right font-bold ${pnlUp ? "text-emerald-400" : "text-coral-400"}`}>
-                        {pnlUp ? "+" : ""}{Number(p.pnl_pct || 0).toFixed(2)}%
+                      <td className="py-2.5 px-3 text-right text-white font-bold">
+                        {p.current_value != null ? `$${Number(p.current_value).toFixed(2)}` : "—"}
+                      </td>
+                      <td className={`py-2.5 px-3 text-right font-bold ${p.pnl != null ? (pnlUp ? "text-emerald-400" : "text-coral-400") : "text-slate-400"}`}>
+                        {p.pnl != null ? `${pnlUp ? "+" : ""}$${Number(p.pnl).toFixed(2)}` : "—"}
+                      </td>
+                      <td className={`py-2.5 px-3 text-right font-bold ${p.pnl_pct != null ? (pnlUp ? "text-emerald-400" : "text-coral-400") : "text-slate-400"}`}>
+                        {p.pnl_pct != null ? `${pnlUp ? "+" : ""}${Number(p.pnl_pct).toFixed(2)}%` : "—"}
                       </td>
                     </tr>
                   );

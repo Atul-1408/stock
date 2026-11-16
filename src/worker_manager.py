@@ -99,6 +99,7 @@ class WorkerManager:
             "currency_converter": {"status": "stopped", "last_heartbeat": None, "last_error": None},
             "alert_engine": {"status": "stopped", "last_heartbeat": None, "last_error": None},
             "trading_bot": {"status": "stopped", "last_heartbeat": None, "last_error": None},
+            "order_matching_engine": {"status": "stopped", "last_heartbeat": None, "last_error": None},
         }
         self._state_lock = threading.Lock()
 
@@ -182,6 +183,9 @@ class WorkerManager:
         # 4. Trading Bot
         self._start_supervised_worker("trading_bot", self._run_trading_bot)
 
+        # 5. Order Matching Engine
+        self._start_supervised_worker("order_matching_engine", self._run_order_matching_engine)
+
         return True
 
     def _start_supervised_worker(self, name: str, target: Callable) -> None:
@@ -258,6 +262,23 @@ class WorkerManager:
             bot.run_bot_engine()
         except Exception as e:
             self.record_error("trading_bot", str(e))
+
+    def _run_order_matching_engine(self) -> None:
+        try:
+            import trading_engine
+            while not self._stop_requested.is_set():
+                self.record_heartbeat("order_matching_engine")
+                try:
+                    trading_engine.match_pending_orders()
+                except Exception as e:
+                    logger.warning(f"[Worker:order_matching_engine] Error during matching: {e}")
+
+                for _ in range(20):
+                    if self._stop_requested.is_set():
+                        break
+                    time.sleep(0.1)
+        except Exception as e:
+            self.record_error("order_matching_engine", str(e))
 
     def stop_all(self) -> None:
         """Signal all workers to stop and release lock."""

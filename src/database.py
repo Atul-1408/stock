@@ -1082,9 +1082,10 @@ def get_closed_trades(user_id: int, is_bot: Optional[bool] = None) -> List[Dict]
     using the Weighted-Average Cost (WAC) accounting method.
     """
     transactions = get_transactions_by_user(user_id, limit=9999) # Get all
-    if is_bot is not None:
-        expected_bot = 1 if is_bot else 0
-        transactions = [tx for tx in transactions if int(tx.get('is_bot', 0) or 0) == expected_bot]
+    if is_bot is True:
+        transactions = [tx for tx in transactions if tx.get('is_bot') is not None and int(tx.get('is_bot')) == 1]
+    elif is_bot is False:
+        transactions = [tx for tx in transactions if tx.get('is_bot') is not None and int(tx.get('is_bot')) == 0]
 
     transactions.reverse() # Chronological order
     
@@ -1106,7 +1107,7 @@ def get_closed_trades(user_id: int, is_bot: Optional[bool] = None) -> List[Dict]
         elif action == 'SELL':
             # Check if transaction has stored realized_pnl
             stored_pnl = tx.get('realized_pnl')
-            if stored_pnl is not None and stored_pnl != 0.0:
+            if stored_pnl is not None:
                 pnl = float(stored_pnl)
                 cost_basis = max(0.0, total_val - pnl)
                 buy_price = round(cost_basis / shares, 4) if shares > 0 else price
@@ -1123,18 +1124,21 @@ def get_closed_trades(user_id: int, is_bot: Optional[bool] = None) -> List[Dict]
                 inventory[ticker]['total_invested'] = max(0.0, inv_invested - cost_basis)
             else:
                 buy_price = price
+                cost_basis = total_val
                 pnl = 0.0
                 pnl_pct = 0.0
 
+            raw_bot = tx.get('is_bot')
             closed_trades.append({
                 'ticker': ticker,
                 'shares': shares,
                 'buy_price': round(buy_price, 4),
                 'sell_price': price,
+                'cost_basis': round(cost_basis, 2),
                 'pnl': round(pnl, 2),
                 'pnl_pct': round(pnl_pct, 2),
                 'timestamp': tx['timestamp'],
-                'is_bot': int(tx.get('is_bot', 0) or 0)
+                'is_bot': int(raw_bot) if raw_bot is not None else None
             })
                         
     return closed_trades
@@ -1687,20 +1691,160 @@ def get_all_indices() -> List[Dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 
-# --- Orders ---
-def create_order(user_id, symbol, side, order_type, product_type, quantity, price=None, trigger_price=None, validity='DAY') -> int:
-    now = datetime.now(timezone.utc).isoformat()
+# --- Orders & Buying Power System ---
+
+def get_user_reserved_cash(user_id: int) -> float:
+    """Calculate total cash reserved by all active pending BUY orders for a user."""
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO orders (user_id, symbol, side, order_type, product_type, quantity, price, trigger_price, validity, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)
+            SELECT COALESCE(SUM(quantity * price), 0.0)
+            FROM orders
+            WHERE user_id = ? AND side = 'BUY' AND status = 'OPEN'
             """,
-            (user_id, symbol.upper(), side, order_type, product_type, quantity, price, trigger_price, validity, now, now)
+            (user_id,)
         )
+        row = cursor.fetchone()
+        return float(row[0]) if row and row[0] is not None else 0.0
+
+
+def get_user_buying_power(user_id: int) -> float:
+    """Calculate available cash buying power after deducting active pending BUY order reservations."""
+    balance = get_user_balance(user_id) or 0.0
+    reserved = get_user_reserved_cash(user_id)
+    return max(0.0, round(balance - reserved, 4))
+
+
+def get_user_reserved_shares(user_id: int, symbol: str) -> float:
+    """Calculate total shares reserved by active pending SELL orders for a specific ticker."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(quantity), 0.0)
+            FROM orders
+            WHERE user_id = ? AND symbol = ? AND side = 'SELL' AND status = 'OPEN'
+            """,
+            (user_id, symbol.strip().upper())
+        )
+        row = cursor.fetchone()
+        return float(row[0]) if row and row[0] is not None else 0.0
+
+
+def get_user_available_shares(user_id: int, symbol: str) -> float:
+    """Calculate unreserved shares available to sell for a ticker."""
+    total_shares = get_user_shares(user_id, symbol)
+    reserved = get_user_reserved_shares(user_id, symbol)
+    return max(0.0, round(total_shares - reserved, 6))
+
+
+def create_order(
+    user_id: int,
+    symbol: str,
+    side: str,
+    order_type: str,
+    product_type: str,
+    quantity: float,
+    price: Optional[float] = None,
+    trigger_price: Optional[float] = None,
+    validity: str = 'DAY',
+    is_bot: bool = False
+) -> int:
+    """
+    Creates a pending order while atomically checking and reserving buying power (BUY) or shares (SELL).
+    Guarantees:
+    - Atomicity via SQLite BEGIN IMMEDIATE write transaction.
+    - Prevents concurrent over-reservation of cash across multiple submissions.
+    - Raises ValueError if buying power or available shares are insufficient.
+    """
+    symbol = symbol.strip().upper()
+    side = side.strip().upper()
+    order_type = order_type.strip().upper()
+    product_type = product_type.strip().upper()
+    validity = (validity or 'DAY').strip().upper()
+    quantity = float(quantity)
+    bot_flag = 1 if is_bot else 0
+    now = datetime.now(timezone.utc).isoformat()
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+
+        # 1. Verify user exists and fetch current cash balance
+        cursor.execute("SELECT current_balance FROM users WHERE id = ?", (user_id,))
+        user_row = cursor.fetchone()
+        if not user_row:
+            conn.rollback()
+            raise ValueError(f"User {user_id} does not exist.")
+        current_balance = float(user_row['current_balance'])
+
+        # 2. Reservation check under write lock
+        if side == 'BUY':
+            order_price = float(price) if price is not None and float(price) > 0 else 0.0
+            if order_price <= 0 and order_type != 'MARKET':
+                conn.rollback()
+                raise ValueError("Limit orders must specify a positive price.")
+
+            total_required = round(quantity * order_price, 4)
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(quantity * price), 0.0)
+                FROM orders
+                WHERE user_id = ? AND side = 'BUY' AND status = 'OPEN'
+                """,
+                (user_id,)
+            )
+            reserved_cash = float(cursor.fetchone()[0])
+            available_bp = round(current_balance - reserved_cash, 4)
+
+            if total_required > available_bp:
+                conn.rollback()
+                raise ValueError(
+                    f"Insufficient funds / buying power. Required: ${total_required:,.2f}, Available: ${available_bp:,.2f}"
+                )
+        elif side == 'SELL':
+            cursor.execute("SELECT shares FROM portfolio WHERE user_id = ? AND ticker = ?", (user_id, symbol))
+            holding_row = cursor.fetchone()
+            owned_shares = float(holding_row['shares']) if holding_row else 0.0
+
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(quantity), 0.0)
+                FROM orders
+                WHERE user_id = ? AND symbol = ? AND side = 'SELL' AND status = 'OPEN'
+                """,
+                (user_id, symbol)
+            )
+            reserved_shares = float(cursor.fetchone()[0])
+            available_shares = round(owned_shares - reserved_shares, 6)
+
+            if quantity > available_shares:
+                conn.rollback()
+                raise ValueError(
+                    f"Insufficient shares. You only own {owned_shares} shares of {symbol} (available: {available_shares})."
+                )
+        else:
+            conn.rollback()
+            raise ValueError(f"Invalid order side: {side}")
+
+        # 3. Insert order
+        cursor.execute(
+            """
+            INSERT INTO orders (user_id, symbol, side, order_type, product_type, quantity, price, trigger_price, validity, status, is_bot, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
+            """,
+            (user_id, symbol, side, order_type, product_type, quantity, price, trigger_price, validity, bot_flag, now, now)
+        )
+        order_id = cursor.lastrowid
         conn.commit()
-        return cursor.lastrowid
+        return order_id
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
 
 
 def get_user_orders(user_id: int, status: str = None, limit: int = 50) -> List[Dict]:
@@ -1713,24 +1857,334 @@ def get_user_orders(user_id: int, status: str = None, limit: int = 50) -> List[D
         return [dict(row) for row in cursor.fetchall()]
 
 
-def cancel_order(order_id: int, user_id: int) -> bool:
-    now = datetime.now(timezone.utc).isoformat()
+def get_open_orders(symbol: Optional[str] = None) -> List[Dict]:
+    """Retrieve all active orders in OPEN status chronologically."""
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE orders SET status = 'CANCELLED', updated_at = ? WHERE id = ? AND user_id = ? AND status = 'OPEN'", (now, order_id, user_id))
+        if symbol:
+            cursor.execute(
+                "SELECT * FROM orders WHERE status = 'OPEN' AND symbol = ? ORDER BY created_at ASC, id ASC",
+                (symbol.strip().upper(),)
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM orders WHERE status = 'OPEN' ORDER BY created_at ASC, id ASC"
+            )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def cancel_order(order_id: int, user_id: Optional[int] = None) -> bool:
+    """
+    Cancels an active OPEN order atomically under BEGIN IMMEDIATE.
+    Instantly releases reserved buying power (BUY) or reserved shares (SELL).
+    Returns False if order does not exist or is already FILLED, CANCELLED, or EXPIRED.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+
+        if user_id is not None:
+            cursor.execute("SELECT status FROM orders WHERE id = ? AND user_id = ?", (order_id, user_id))
+        else:
+            cursor.execute("SELECT status FROM orders WHERE id = ?", (order_id,))
+        row = cursor.fetchone()
+        if not row or row['status'] != 'OPEN':
+            conn.rollback()
+            return False
+
+        if user_id is not None:
+            cursor.execute(
+                "UPDATE orders SET status = 'CANCELLED', updated_at = ? WHERE id = ? AND user_id = ? AND status = 'OPEN'",
+                (now, order_id, user_id)
+            )
+        else:
+            cursor.execute(
+                "UPDATE orders SET status = 'CANCELLED', updated_at = ? WHERE id = ? AND status = 'OPEN'",
+                (now, order_id)
+            )
+        success = cursor.rowcount > 0
         conn.commit()
-        return cursor.rowcount > 0
+        return success
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def expire_order(order_id: int) -> bool:
+    """Marks an OPEN order as EXPIRED atomically, releasing any reservation."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute("SELECT status FROM orders WHERE id = ?", (order_id,))
+        row = cursor.fetchone()
+        if not row or row['status'] != 'OPEN':
+            conn.rollback()
+            return False
+
+        cursor.execute(
+            "UPDATE orders SET status = 'EXPIRED', updated_at = ? WHERE id = ? AND status = 'OPEN'",
+            (now, order_id)
+        )
+        success = cursor.rowcount > 0
+        conn.commit()
+        return success
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def expire_stale_orders() -> int:
+    """
+    Scans for expired DAY/IOC orders and marks them as EXPIRED.
+    Releases all buying power reservations for expired orders.
+    """
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    expired_count = 0
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute("SELECT id, validity, created_at FROM orders WHERE status = 'OPEN'")
+        open_orders = cursor.fetchall()
+        for ord_row in open_orders:
+            ord_id = ord_row['id']
+            val = (ord_row['validity'] or 'DAY').upper()
+            created_at_str = ord_row['created_at']
+            should_expire = False
+            try:
+                created_dt = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+                if created_dt.tzinfo is None:
+                    created_dt = created_dt.replace(tzinfo=timezone.utc)
+                if val == 'DAY' and (now.date() > created_dt.date() or (now - created_dt).total_seconds() >= 86400):
+                    should_expire = True
+                elif val == 'IOC':
+                    should_expire = True
+            except Exception:
+                pass
+
+            if should_expire:
+                cursor.execute(
+                    "UPDATE orders SET status = 'EXPIRED', updated_at = ? WHERE id = ? AND status = 'OPEN'",
+                    (now_iso, ord_id)
+                )
+                if cursor.rowcount > 0:
+                    expired_count += 1
+        conn.commit()
+        return expired_count
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def fill_order_atomic(order_id: int, execution_price: float) -> Dict:
+    """
+    Atomically fills an active OPEN order and executes full financial ledger accounting:
+    1. Revalidates order status is OPEN under exclusive write lock (duplicate fill & race protection).
+    2. Revalidates required cash (BUY) or shares (SELL) at actual execution price.
+    3. Debits or credits user cash balance.
+    4. Updates portfolio holdings with Weighted-Average Cost (WAC).
+    5. Sets orders status = 'FILLED', filled_quantity = quantity, filled_price = execution_price.
+    6. Writes an audit transaction into transactions table with realized_pnl and is_bot attribution.
+    7. Atomically converts the reservation into a true ledger debit/credit without double-counting.
+    """
+    import math
+
+    try:
+        execution_price = float(execution_price)
+    except (ValueError, TypeError):
+        return {"success": False, "message": "Execution price must be a positive finite number."}
+
+    if not math.isfinite(execution_price) or math.isnan(execution_price) or math.isinf(execution_price) or execution_price <= 0:
+        return {"success": False, "message": "Execution price must be a positive finite number."}
+
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+
+        # 1. Fetch order
+        cursor.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
+        order_row = cursor.fetchone()
+        if not order_row:
+            conn.rollback()
+            return {"success": False, "message": f"Order {order_id} not found."}
+
+        current_status = order_row['status']
+        if current_status != 'OPEN':
+            conn.rollback()
+            return {
+                "success": False,
+                "message": f"Order {order_id} cannot be filled because current status is '{current_status}'."
+            }
+
+        user_id = order_row['user_id']
+        symbol = order_row['symbol'].upper()
+        side = order_row['side'].upper()
+        order_type = order_row['order_type'].upper()
+        quantity = float(order_row['quantity'])
+        order_limit_price = float(order_row['price']) if order_row['price'] is not None else None
+        is_bot = int(order_row['is_bot'] or 0)
+
+        # 1b. Atomic Limit-Price Enforcement Guard
+        if order_type == 'LIMIT' and order_limit_price is not None and order_limit_price > 0:
+            if side == 'BUY' and execution_price > order_limit_price:
+                conn.rollback()
+                return {
+                    "success": False,
+                    "message": f"Limit price violation: BUY execution price (${execution_price:,.2f}) exceeds limit (${order_limit_price:,.2f})."
+                }
+            elif side == 'SELL' and execution_price < order_limit_price:
+                conn.rollback()
+                return {
+                    "success": False,
+                    "message": f"Limit price violation: SELL execution price (${execution_price:,.2f}) is below limit (${order_limit_price:,.2f})."
+                }
+
+        total_value = round(quantity * execution_price, 4)
+        realized_pnl = 0.0
+
+        # 2. Fetch user balance
+        cursor.execute("SELECT current_balance FROM users WHERE id = ?", (user_id,))
+        user_row = cursor.fetchone()
+        if not user_row:
+            conn.rollback()
+            return {"success": False, "message": f"User {user_id} not found."}
+        current_balance = float(user_row['current_balance'])
+
+        # 3. Fetch portfolio holding
+        cursor.execute(
+            "SELECT shares, avg_buy_price, total_invested FROM portfolio WHERE user_id = ? AND ticker = ?",
+            (user_id, symbol)
+        )
+        holding_row = cursor.fetchone()
+        existing_shares = float(holding_row['shares']) if holding_row else 0.0
+        existing_total_invested = float(holding_row['total_invested']) if holding_row else 0.0
+
+        if side == 'BUY':
+            if current_balance < total_value:
+                # Mark order as REJECTED due to insufficient cash at execution time
+                cursor.execute(
+                    "UPDATE orders SET status = 'REJECTED', updated_at = ? WHERE id = ? AND status = 'OPEN'",
+                    (now, order_id)
+                )
+                conn.commit()
+                return {
+                    "success": False,
+                    "message": f"Insufficient funds at execution time. Required: ${total_value:,.2f}, Available: ${current_balance:,.2f}"
+                }
+
+            new_balance = round(current_balance - total_value, 4)
+            cursor.execute("UPDATE users SET current_balance = ? WHERE id = ?", (new_balance, user_id))
+
+            new_shares = existing_shares + quantity
+            new_total_invested = existing_total_invested + total_value
+            new_avg_price = round(new_total_invested / new_shares, 4) if new_shares > 0 else execution_price
+
+            cursor.execute(
+                """
+                INSERT INTO portfolio (user_id, ticker, shares, avg_buy_price, total_invested, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, ticker) DO UPDATE SET
+                    shares = excluded.shares,
+                    avg_buy_price = excluded.avg_buy_price,
+                    total_invested = excluded.total_invested,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, symbol, new_shares, new_avg_price, new_total_invested, now, now)
+            )
+        elif side == 'SELL':
+            if existing_shares < quantity:
+                cursor.execute(
+                    "UPDATE orders SET status = 'REJECTED', updated_at = ? WHERE id = ? AND status = 'OPEN'",
+                    (now, order_id)
+                )
+                conn.commit()
+                return {
+                    "success": False,
+                    "message": f"Insufficient shares at execution time. Owned: {existing_shares}, Required: {quantity}"
+                }
+
+            avg_buy_price = float(holding_row['avg_buy_price']) if holding_row else execution_price
+            realized_pnl = round((execution_price - avg_buy_price) * quantity, 4)
+            new_balance = round(current_balance + total_value, 4)
+            cursor.execute("UPDATE users SET current_balance = ? WHERE id = ?", (new_balance, user_id))
+
+            new_shares = existing_shares - quantity
+            if new_shares <= 0.000001:
+                cursor.execute("DELETE FROM portfolio WHERE user_id = ? AND ticker = ?", (user_id, symbol))
+                new_shares = 0.0
+            else:
+                new_total_invested = max(0.0, existing_total_invested - (quantity * avg_buy_price))
+                cursor.execute(
+                    "UPDATE portfolio SET shares = ?, total_invested = ?, updated_at = ? WHERE user_id = ? AND ticker = ?",
+                    (new_shares, new_total_invested, now, user_id, symbol)
+                )
+        else:
+            conn.rollback()
+            return {"success": False, "message": f"Invalid order side '{side}'."}
+
+        # 4. Mark order as FILLED
+        cursor.execute(
+            """
+            UPDATE orders
+            SET status = 'FILLED', filled_quantity = quantity, filled_price = ?, updated_at = ?
+            WHERE id = ? AND status = 'OPEN'
+            """,
+            (execution_price, now, order_id)
+        )
+        if cursor.rowcount == 0:
+            conn.rollback()
+            return {"success": False, "message": "Concurrent modification: Order is no longer OPEN."}
+
+        # 5. Insert transaction record
+        cursor.execute(
+            """
+            INSERT INTO transactions (user_id, ticker, action, shares, price_per_share, total_value, is_bot, realized_pnl, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, symbol, side, quantity, execution_price, total_value, is_bot, realized_pnl, now)
+        )
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "order_id": order_id,
+            "user_id": user_id,
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "filled_price": execution_price,
+            "total_value": total_value,
+            "new_balance": new_balance,
+            "remaining_shares": new_shares if side == 'SELL' else (existing_shares + quantity),
+            "realized_pnl": realized_pnl,
+            "is_bot": bool(is_bot)
+        }
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
 
 
 def fill_order(order_id: int, filled_price: float) -> None:
-    now = datetime.now(timezone.utc).isoformat()
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE orders SET status = 'FILLED', filled_quantity = quantity, filled_price = ?, updated_at = ? WHERE id = ?",
-            (filled_price, now, order_id)
-        )
-        conn.commit()
+    """Legacy helper: forwards to fill_order_atomic for unified financial ledger safety."""
+    result = fill_order_atomic(order_id, filled_price)
+    if not result.get("success"):
+        logger.warning(f"fill_order failed for order {order_id}: {result.get('message')}")
 
 
 def execute_trade_atomic(
@@ -2038,7 +2492,12 @@ def get_closed_bot_trades(user_id: int) -> List[Dict]:
             "SELECT * FROM bot_trades WHERE user_id = ? AND status = 'CLOSED' ORDER BY exit_time DESC",
             (user_id,)
         )
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+        if rows:
+            return rows
+
+    # Fallback to authoritative transactions ledger for bot trades
+    return get_closed_trades(user_id, is_bot=True)
 
 
 def get_open_bot_trades(user_id: int) -> List[Dict]:

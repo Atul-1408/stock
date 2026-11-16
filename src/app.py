@@ -659,29 +659,32 @@ def get_bot_performance():
             'total_trades': 0,
             'winning_trades': 0,
             'losing_trades': 0,
-            'win_rate': 0,
-            'total_pnl': 0,
-            'avg_profit': 0,
-            'avg_loss': 0
+            'breakeven_trades': 0,
+            'win_rate': 0.0,
+            'total_pnl': 0.0,
+            'avg_profit': 0.0,
+            'avg_loss': 0.0
         }), 200
     
     total_trades = len(trades)
-    winning_trades = len([t for t in trades if (t.get('pnl') or 0) > 0])
-    losing_trades = total_trades - winning_trades
+    winning_trades = len([t for t in trades if float(t.get('pnl', 0.0) or 0.0) > 0])
+    losing_trades = len([t for t in trades if float(t.get('pnl', 0.0) or 0.0) < 0])
+    breakeven_trades = len([t for t in trades if float(t.get('pnl', 0.0) or 0.0) == 0])
     
-    total_pnl = sum((t.get('pnl') or 0) for t in trades)
-    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+    total_pnl = sum(float(t.get('pnl', 0.0) or 0.0) for t in trades)
+    win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
     
-    profits = [(t.get('pnl') or 0) for t in trades if (t.get('pnl') or 0) > 0]
-    losses = [(t.get('pnl') or 0) for t in trades if (t.get('pnl') or 0) < 0]
+    profits = [float(t.get('pnl', 0.0) or 0.0) for t in trades if float(t.get('pnl', 0.0) or 0.0) > 0]
+    losses = [float(t.get('pnl', 0.0) or 0.0) for t in trades if float(t.get('pnl', 0.0) or 0.0) < 0]
     
-    avg_profit = sum(profits) / len(profits) if profits else 0
-    avg_loss = sum(losses) / len(losses) if losses else 0
+    avg_profit = sum(profits) / len(profits) if profits else 0.0
+    avg_loss = sum(losses) / len(losses) if losses else 0.0
     
     return jsonify({
         'total_trades': total_trades,
         'winning_trades': winning_trades,
         'losing_trades': losing_trades,
+        'breakeven_trades': breakeven_trades,
         'win_rate': round(win_rate, 2),
         'total_pnl': round(total_pnl, 2),
         'avg_profit': round(avg_profit, 2),
@@ -915,6 +918,7 @@ def get_user_summary(user_id):
 
 
 @app.route('/api/analytics/overview', methods=['GET'])
+@app.route('/api/analytics/summary', methods=['GET'])
 @jwt_required()
 def get_analytics_overview_api():
     user_id = int(get_jwt_identity())
@@ -1387,6 +1391,27 @@ def get_stock_details(symbol):
     """Get detailed stock information."""
     stock_info = database.get_stock_from_universe(symbol)
     if not stock_info:
+        try:
+            import yfinance as yf
+            t_obj = yf.Ticker(symbol)
+            inf = t_obj.info or {}
+            if inf and ('shortName' in inf or 'longName' in inf):
+                c_name = inf.get('longName') or inf.get('shortName') or symbol
+                exch = inf.get('exchange', 'NSE' if symbol.endswith('.NS') else 'NASDAQ')
+                database.bulk_insert_stocks([{
+                    'symbol': symbol,
+                    'company_name': c_name,
+                    'exchange': exch,
+                    'sector': inf.get('sector'),
+                    'industry': inf.get('industry'),
+                    'market_cap': inf.get('marketCap'),
+                    'country': inf.get('country', 'India' if symbol.endswith('.NS') else 'USA'),
+                    'currency': inf.get('currency', 'INR' if symbol.endswith('.NS') else 'USD')
+                }])
+                stock_info = database.get_stock_from_universe(symbol)
+        except Exception:
+            pass
+    if not stock_info:
         return error_response("Stock not found.", 404)
 
     market_data = database.get_market_data(symbol) or {}
@@ -1461,28 +1486,44 @@ def place_order():
         }), 201
 
     # Handle pending non-market orders (LIMIT / SL / SL-M)
-    user_balance = database.get_user_balance(user_id) or 0.0
-    if side == 'BUY':
-        total_required = qty * validation_price
-        if user_balance < total_required:
-            return error_response(
-                f"Insufficient funds. Required: ${total_required:,.2f}, Available: ${user_balance:,.2f}", 400
-            )
-    elif side == 'SELL':
-        owned_shares = database.get_user_shares(user_id, symbol)
-        if owned_shares < qty:
-            return error_response(
-                f"Insufficient shares. You only own {owned_shares} shares of {symbol}.", 400
-            )
+    effective_limit_price = limit_price or validation_price
+    try:
+        order_id = database.create_order(
+            user_id=user_id, symbol=symbol, side=side,
+            order_type=order_type, product_type=product_type,
+            quantity=qty, price=effective_limit_price,
+            trigger_price=trigger_price, validity=validity
+        )
+    except ValueError as e:
+        return error_response(str(e), 400)
 
-    order_id = database.create_order(
-        user_id=user_id, symbol=symbol, side=side,
-        order_type=order_type, product_type=product_type,
-        quantity=qty, price=limit_price,
-        trigger_price=trigger_price, validity=validity
-    )
+    # Immediate-Or-Cancel (IOC) synchronous processing
+    if (validity or '').upper() == 'IOC':
+        ioc_result = trading_engine.process_ioc_order(order_id)
+        return jsonify({
+            "status": "success",
+            "order_id": order_id,
+            "ioc": ioc_result
+        }), 201
 
     return jsonify({"status": "success", "order_id": order_id}), 201
+
+
+@app.route('/api/orders/buying-power', methods=['GET'])
+@jwt_required()
+def get_buying_power():
+    """Get user's available buying power and active reservations."""
+    user_id = int(get_jwt_identity())
+    buying_power = database.get_user_buying_power(user_id)
+    cash_balance = database.get_user_balance(user_id) or 0.0
+    reserved_cash = database.get_user_reserved_cash(user_id)
+    return jsonify({
+        "status": "success",
+        "buying_power": buying_power,
+        "cash_balance": cash_balance,
+        "reserved_cash": reserved_cash
+    }), 200
+
 
 
 @app.route('/api/orders/list', methods=['GET'])
@@ -1510,12 +1551,13 @@ def cancel_order_api(order_id):
 @app.route('/api/positions', methods=['GET'])
 @jwt_required()
 def get_positions():
-    """Get user's current positions with live P&L."""
+    """Get user's current positions with live P&L and strict price availability handling."""
     user_id = int(get_jwt_identity())
     portfolio = database.get_portfolio(user_id)
 
     positions = []
-    total_pnl = 0
+    known_total_pnl = 0.0
+    all_prices_available = True
 
     for item in portfolio:
         symbol = item.get('ticker', item.get('symbol', ''))
@@ -1526,24 +1568,43 @@ def get_positions():
         ltp = float(md.get('last_price')) if (md and md.get('last_price')) else None
         if not ltp or ltp <= 0:
             ltp = trading_engine.get_current_price(symbol)
-        if not ltp or ltp <= 0:
-            ltp = avg_price
 
-        pnl = (ltp - avg_price) * quantity
-        pnl_pct = ((ltp - avg_price) / avg_price * 100) if avg_price > 0 else 0
-        total_pnl += pnl
+        if ltp and ltp > 0:
+            pnl = (ltp - avg_price) * quantity
+            pnl_pct = ((ltp - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
+            current_value = ltp * quantity
+            price_available = True
+            known_total_pnl += pnl
+        else:
+            ltp = None
+            pnl = None
+            pnl_pct = None
+            current_value = None
+            price_available = False
+            all_prices_available = False
+
+        reserved_shares = database.get_user_reserved_shares(user_id, symbol)
+        available_shares = max(0.0, round(quantity - reserved_shares, 6))
 
         positions.append({
             'symbol': symbol,
             'quantity': quantity,
+            'reserved_shares': reserved_shares,
+            'available_shares': available_shares,
             'avg_price': round(avg_price, 2),
-            'ltp': round(ltp, 2),
-            'pnl': round(pnl, 2),
-            'pnl_pct': round(pnl_pct, 2),
-            'current_value': round(ltp * quantity, 2),
+            'ltp': round(ltp, 2) if ltp is not None else None,
+            'pnl': round(pnl, 2) if pnl is not None else None,
+            'pnl_pct': round(pnl_pct, 2) if pnl_pct is not None else None,
+            'current_value': round(current_value, 2) if current_value is not None else None,
+            'price_available': price_available
         })
 
-    return jsonify({"positions": positions, "total_pnl": round(total_pnl, 2)}), 200
+    return jsonify({
+        "positions": positions,
+        "total_pnl": round(known_total_pnl, 2) if all_prices_available else None,
+        "known_total_pnl": round(known_total_pnl, 2),
+        "all_prices_available": all_prices_available
+    }), 200
 
 
 # ==========================================

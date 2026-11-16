@@ -25,6 +25,9 @@ def send_otp_email(recipient_email: str, otp_code: str) -> bool:
     app_password = Config.GMAIL_APP_PASSWORD
 
     if not sender_email or not app_password:
+        if not Config.IS_PRODUCTION:
+            print(f"[MOCK OTP] Gmail credentials not configured in .env. DEV LOGIN OTP for {recipient_email}: {otp_code}")
+            return True
         print("ERROR: Gmail credentials not configured in .env")
         return False
 
