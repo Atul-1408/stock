@@ -349,6 +349,73 @@ class TestPhase4LedgerRemediation(unittest.TestCase):
         self.assertGreaterEqual(perf["total_pnl_pct"], 0.0)  # Must NOT be -100%!
         self.assertEqual(perf["win_rate"], 100.0)
 
+    # -------------------------------------------------------------
+    # 8. MULTI-CURRENCY CONVERSION TRADE TESTS
+    # -------------------------------------------------------------
+    def test_11_currency_conversion_usd_buy(self):
+        """Verify that USD asset purchase against USD base currency executes at 1:1 without conversion."""
+        user_row = database.get_user_by_id(self.user_id)
+        initial_balance = float(user_row['current_balance'])
+
+        res = database.execute_trade_atomic(self.user_id, "MSFT", "BUY", 2.0, 200.0)
+        self.assertTrue(res["success"])
+
+        # Check balance debit: 2 * 200 = 400 USD
+        after_user = database.get_user_by_id(self.user_id)
+        self.assertAlmostEqual(float(after_user['current_balance']), initial_balance - 400.0, places=2)
+
+        # Check transaction record
+        with database.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM transactions WHERE user_id = ? AND ticker = 'MSFT' ORDER BY id DESC LIMIT 1", (self.user_id,))
+            tx = dict(cur.fetchone())
+            self.assertEqual(tx["currency"], "USD")
+            self.assertEqual(tx["base_currency"], "USD")
+            self.assertEqual(tx["price_per_share"], 200.0)
+            self.assertEqual(tx["base_price_per_share"], 200.0)
+            self.assertEqual(tx["total_value"], 400.0)
+            self.assertEqual(tx["base_total_value"], 400.0)
+            self.assertEqual(tx["exchange_rate"], 1.0)
+
+    def test_12_currency_conversion_inr_buy(self):
+        """Verify that INR (.NS) asset purchase converts execution price to USD base currency at fill time."""
+        user_row = database.get_user_by_id(self.user_id)
+        initial_balance = float(user_row['current_balance'])
+
+        # Ensure known USD_INR rate
+        with database.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """INSERT INTO exchange_rates (from_currency, to_currency, rate, updated_at)
+                   VALUES ('USD', 'INR', 80.0, '2026-01-01T00:00:00')
+                   ON CONFLICT(from_currency, to_currency) DO UPDATE SET rate=80.0"""
+            )
+            conn.commit()
+        from currency_converter import currency_converter
+        currency_converter._load_cache()
+
+        # Buy 1 share of TCS.NS at 3,200.0 INR
+        # Expected base price in USD = 3200 / 80.0 = 40.0 USD
+        res = database.execute_trade_atomic(self.user_id, "TCS.NS", "BUY", 1.0, 3200.0)
+        self.assertTrue(res["success"])
+
+        # User's USD balance must be deducted by $40.00 USD, NOT 3,200!
+        after_user = database.get_user_by_id(self.user_id)
+        self.assertAlmostEqual(float(after_user['current_balance']), initial_balance - 40.0, places=2)
+
+        # Check transaction audit record
+        with database.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM transactions WHERE user_id = ? AND ticker = 'TCS.NS' ORDER BY id DESC LIMIT 1", (self.user_id,))
+            tx = dict(cur.fetchone())
+            self.assertEqual(tx["currency"], "INR")
+            self.assertEqual(tx["base_currency"], "USD")
+            self.assertEqual(tx["price_per_share"], 3200.0)
+            self.assertAlmostEqual(tx["base_price_per_share"], 40.0, places=2)
+            self.assertEqual(tx["total_value"], 3200.0)
+            self.assertAlmostEqual(tx["base_total_value"], 40.0, places=2)
+            self.assertAlmostEqual(tx["exchange_rate"], 0.0125, places=4)
+
 
 if __name__ == "__main__":
     unittest.main()

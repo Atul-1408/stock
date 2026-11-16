@@ -230,6 +230,11 @@ def init_db() -> None:
                 realized_pnl REAL DEFAULT 0.0,
                 timestamp TEXT NOT NULL,
                 notes TEXT,
+                currency TEXT DEFAULT 'USD',
+                base_currency TEXT DEFAULT 'USD',
+                base_price_per_share REAL,
+                base_total_value REAL,
+                exchange_rate REAL DEFAULT 1.0,
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
@@ -511,6 +516,17 @@ def init_db() -> None:
             cursor.execute("ALTER TABLE transactions ADD COLUMN is_bot INTEGER DEFAULT 0")
         except Exception:
             pass
+        for col_def in [
+            "currency TEXT DEFAULT 'USD'",
+            "base_currency TEXT DEFAULT 'USD'",
+            "base_price_per_share REAL",
+            "base_total_value REAL",
+            "exchange_rate REAL DEFAULT 1.0"
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE transactions ADD COLUMN {col_def}")
+            except Exception:
+                pass
         try:
             cursor.execute("ALTER TABLE transactions ADD COLUMN realized_pnl REAL DEFAULT 0.0")
         except Exception:
@@ -2052,16 +2068,24 @@ def fill_order_atomic(order_id: int, execution_price: float) -> Dict:
                     "message": f"Limit price violation: SELL execution price (${execution_price:,.2f}) is below limit (${order_limit_price:,.2f})."
                 }
 
-        total_value = round(quantity * execution_price, 4)
+        native_total_value = round(quantity * execution_price, 4)
         realized_pnl = 0.0
 
         # 2. Fetch user balance
-        cursor.execute("SELECT current_balance FROM users WHERE id = ?", (user_id,))
+        cursor.execute("SELECT current_balance, preferred_currency FROM users WHERE id = ?", (user_id,))
         user_row = cursor.fetchone()
         if not user_row:
             conn.rollback()
             return {"success": False, "message": f"User {user_id} not found."}
         current_balance = float(user_row['current_balance'])
+
+        # Multi-currency conversion at fill time
+        conv = convert_trade_currency(symbol, user_id, execution_price, quantity, conn=conn)
+        asset_curr = conv["asset_currency"]
+        base_curr = conv["base_currency"]
+        rate = conv["exchange_rate"]
+        base_price = conv["base_price"]
+        base_total = conv["base_total_value"]
 
         # 3. Fetch portfolio holding
         cursor.execute(
@@ -2073,7 +2097,7 @@ def fill_order_atomic(order_id: int, execution_price: float) -> Dict:
         existing_total_invested = float(holding_row['total_invested']) if holding_row else 0.0
 
         if side == 'BUY':
-            if current_balance < total_value:
+            if current_balance < base_total:
                 # Mark order as REJECTED due to insufficient cash at execution time
                 cursor.execute(
                     "UPDATE orders SET status = 'REJECTED', updated_at = ? WHERE id = ? AND status = 'OPEN'",
@@ -2082,15 +2106,15 @@ def fill_order_atomic(order_id: int, execution_price: float) -> Dict:
                 conn.commit()
                 return {
                     "success": False,
-                    "message": f"Insufficient funds at execution time. Required: ${total_value:,.2f}, Available: ${current_balance:,.2f}"
+                    "message": f"Insufficient funds at execution time. Required: {base_total:,.2f} {base_curr}, Available: {current_balance:,.2f} {base_curr}"
                 }
 
-            new_balance = round(current_balance - total_value, 4)
+            new_balance = round(current_balance - base_total, 4)
             cursor.execute("UPDATE users SET current_balance = ? WHERE id = ?", (new_balance, user_id))
 
             new_shares = existing_shares + quantity
-            new_total_invested = existing_total_invested + total_value
-            new_avg_price = round(new_total_invested / new_shares, 4) if new_shares > 0 else execution_price
+            new_total_invested = existing_total_invested + base_total
+            new_avg_price = round(new_total_invested / new_shares, 4) if new_shares > 0 else base_price
 
             cursor.execute(
                 """
@@ -2116,9 +2140,9 @@ def fill_order_atomic(order_id: int, execution_price: float) -> Dict:
                     "message": f"Insufficient shares at execution time. Owned: {existing_shares}, Required: {quantity}"
                 }
 
-            avg_buy_price = float(holding_row['avg_buy_price']) if holding_row else execution_price
-            realized_pnl = round((execution_price - avg_buy_price) * quantity, 4)
-            new_balance = round(current_balance + total_value, 4)
+            avg_buy_price = float(holding_row['avg_buy_price']) if holding_row else base_price
+            realized_pnl = round((base_price - avg_buy_price) * quantity, 4)
+            new_balance = round(current_balance + base_total, 4)
             cursor.execute("UPDATE users SET current_balance = ? WHERE id = ?", (new_balance, user_id))
 
             new_shares = existing_shares - quantity
@@ -2148,13 +2172,17 @@ def fill_order_atomic(order_id: int, execution_price: float) -> Dict:
             conn.rollback()
             return {"success": False, "message": "Concurrent modification: Order is no longer OPEN."}
 
-        # 5. Insert transaction record
+        # 5. Insert transaction record with multi-currency fields
         cursor.execute(
             """
-            INSERT INTO transactions (user_id, ticker, action, shares, price_per_share, total_value, is_bot, realized_pnl, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO transactions (
+                user_id, ticker, action, shares, price_per_share, total_value, is_bot, realized_pnl, timestamp,
+                currency, base_currency, base_price_per_share, base_total_value, exchange_rate
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, symbol, side, quantity, execution_price, total_value, is_bot, realized_pnl, now)
+            (user_id, symbol, side, quantity, execution_price, native_total_value, is_bot, realized_pnl, now,
+             asset_curr, base_curr, base_price, base_total, rate)
         )
 
         conn.commit()
@@ -2167,7 +2195,11 @@ def fill_order_atomic(order_id: int, execution_price: float) -> Dict:
             "side": side,
             "quantity": quantity,
             "filled_price": execution_price,
-            "total_value": total_value,
+            "total_value": native_total_value,
+            "base_total_value": base_total,
+            "currency": asset_curr,
+            "base_currency": base_curr,
+            "exchange_rate": rate,
             "new_balance": new_balance,
             "remaining_shares": new_shares if side == 'SELL' else (existing_shares + quantity),
             "realized_pnl": realized_pnl,
@@ -2185,6 +2217,76 @@ def fill_order(order_id: int, filled_price: float) -> None:
     result = fill_order_atomic(order_id, filled_price)
     if not result.get("success"):
         logger.warning(f"fill_order failed for order {order_id}: {result.get('message')}")
+
+
+def get_symbol_currency(symbol: str) -> str:
+    """Return the native currency code for a given symbol (INR for .NS/.BO, USD otherwise)."""
+    sym = symbol.strip().upper()
+    if sym.endswith(".NS") or sym.endswith(".BO"):
+        return "INR"
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT currency FROM stock_universe WHERE symbol = ?", (sym,))
+            row = cur.fetchone()
+            if row and row['currency']:
+                return str(row['currency']).upper()
+    except Exception:
+        pass
+    return "USD"
+
+
+def convert_trade_currency(symbol: str, user_id: int, execution_price: float, quantity: float, conn=None) -> Dict[str, Any]:
+    """
+    # DECISION: Implemented option (b) - converting execution price to user's base currency
+    # using currency_converter at fill time and recording both native and base currency amounts in transactions.
+    """
+    from currency_converter import currency_converter
+    asset_curr = get_symbol_currency(symbol)
+
+    user_curr = "USD"
+    try:
+        if conn:
+            cur = conn.cursor()
+            cur.execute("SELECT preferred_currency FROM users WHERE id = ?", (user_id,))
+            urow = cur.fetchone()
+            if urow and urow['preferred_currency']:
+                user_curr = str(urow['preferred_currency']).upper()
+        else:
+            user_curr = get_user_preferred_currency(user_id)
+    except Exception:
+        user_curr = "USD"
+
+    native_total_value = round(quantity * execution_price, 4)
+    if asset_curr == user_curr:
+        return {
+            "asset_currency": asset_curr,
+            "base_currency": user_curr,
+            "exchange_rate": 1.0,
+            "native_price": execution_price,
+            "native_total_value": native_total_value,
+            "base_price": execution_price,
+            "base_total_value": native_total_value
+        }
+
+    converted_price = currency_converter.convert(execution_price, asset_curr, user_curr)
+    if converted_price is None or converted_price <= 0:
+        base_price = execution_price
+        rate = 1.0
+    else:
+        base_price = round(converted_price, 4)
+        rate = round(base_price / execution_price, 6) if execution_price > 0 else 1.0
+
+    base_total_value = round(quantity * base_price, 4)
+    return {
+        "asset_currency": asset_curr,
+        "base_currency": user_curr,
+        "exchange_rate": rate,
+        "native_price": execution_price,
+        "native_total_value": native_total_value,
+        "base_price": base_price,
+        "base_total_value": base_total_value
+    }
 
 
 def execute_trade_atomic(
@@ -2208,7 +2310,8 @@ def execute_trade_atomic(
     side = side.strip().upper()
     quantity = float(quantity)
     execution_price = float(execution_price)
-    total_value = round(quantity * execution_price, 4)
+    native_total_value = round(quantity * execution_price, 4)
+    total_value = native_total_value
     now = datetime.now(timezone.utc).isoformat()
     bot_flag = 1 if is_bot else 0
     realized_pnl = 0.0
@@ -2219,13 +2322,21 @@ def execute_trade_atomic(
         # Immediate exclusive write lock for this transaction
         cursor.execute("BEGIN IMMEDIATE")
 
-        # 1. Fetch user balance
-        cursor.execute("SELECT current_balance FROM users WHERE id = ?", (user_id,))
+        # 1. Fetch user balance & preferred currency
+        cursor.execute("SELECT current_balance, preferred_currency FROM users WHERE id = ?", (user_id,))
         user_row = cursor.fetchone()
         if not user_row:
             conn.rollback()
             return {"success": False, "message": "User not found."}
         current_balance = float(user_row['current_balance'])
+
+        # Multi-currency conversion at fill time
+        conv = convert_trade_currency(symbol, user_id, execution_price, quantity, conn=conn)
+        asset_curr = conv["asset_currency"]
+        base_curr = conv["base_currency"]
+        rate = conv["exchange_rate"]
+        base_price = conv["base_price"]
+        base_total = conv["base_total_value"]
 
         # 2. Fetch current holding
         cursor.execute(
@@ -2237,19 +2348,19 @@ def execute_trade_atomic(
         existing_total_invested = float(holding_row['total_invested']) if holding_row else 0.0
 
         if side == 'BUY':
-            if current_balance < total_value:
+            if current_balance < base_total:
                 conn.rollback()
                 return {
                     "success": False,
-                    "message": f"Insufficient funds. Required: ${total_value:,.2f}, Available: ${current_balance:,.2f}"
+                    "message": f"Insufficient funds. Required: {base_total:,.2f} {base_curr}, Available: {current_balance:,.2f} {base_curr}"
                 }
 
-            new_balance = round(current_balance - total_value, 4)
+            new_balance = round(current_balance - base_total, 4)
             cursor.execute("UPDATE users SET current_balance = ? WHERE id = ?", (new_balance, user_id))
 
             new_shares = existing_shares + quantity
-            new_total_invested = existing_total_invested + total_value
-            new_avg_price = round(new_total_invested / new_shares, 4) if new_shares > 0 else execution_price
+            new_total_invested = existing_total_invested + base_total
+            new_avg_price = round(new_total_invested / new_shares, 4) if new_shares > 0 else base_price
 
             cursor.execute(
                 """
@@ -2271,10 +2382,10 @@ def execute_trade_atomic(
                     "message": f"Insufficient shares. You only own {existing_shares} shares of {symbol}."
                 }
 
-            avg_buy_price = float(holding_row['avg_buy_price']) if holding_row else execution_price
-            realized_pnl = round((execution_price - avg_buy_price) * quantity, 4)
+            avg_buy_price = float(holding_row['avg_buy_price']) if holding_row else base_price
+            realized_pnl = round((base_price - avg_buy_price) * quantity, 4)
 
-            new_balance = round(current_balance + total_value, 4)
+            new_balance = round(current_balance + base_total, 4)
             cursor.execute("UPDATE users SET current_balance = ? WHERE id = ?", (new_balance, user_id))
 
             new_shares = existing_shares - quantity
@@ -2301,13 +2412,18 @@ def execute_trade_atomic(
         )
         order_id = cursor.lastrowid
 
-        # 4. Record transaction in audit log
+        # 4. Record transaction in audit log with multi-currency fields
         cursor.execute(
             """
-            INSERT INTO transactions (user_id, ticker, action, shares, price_per_share, total_value, sentiment_score, sentiment_label, is_bot, realized_pnl, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO transactions (
+                user_id, ticker, action, shares, price_per_share, total_value,
+                sentiment_score, sentiment_label, is_bot, realized_pnl, timestamp,
+                currency, base_currency, base_price_per_share, base_total_value, exchange_rate
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, symbol, side, quantity, execution_price, total_value, sentiment_score, sentiment_label, bot_flag, realized_pnl, now)
+            (user_id, symbol, side, quantity, execution_price, native_total_value, sentiment_score, sentiment_label, bot_flag, realized_pnl, now,
+             asset_curr, base_curr, base_price, base_total, rate)
         )
 
         conn.commit()
