@@ -417,5 +417,35 @@ class TestPhase4LedgerRemediation(unittest.TestCase):
             self.assertAlmostEqual(tx["exchange_rate"], 0.0125, places=4)
 
 
+    def test_13_api_trade_routed_through_validate_order_input(self):
+        """Verify /api/trade validates ticker format and caps quantity at 1,000,000."""
+        # Bad ticker format
+        res1 = self.client.post("/api/trade", json={
+            "ticker": "INVALID$$$SYMBOL!",
+            "action": "BUY",
+            "shares": 10
+        }, headers=self.headers)
+        self.assertEqual(res1.status_code, 400)
+        self.assertIn("Invalid stock symbol", res1.get_json()["message"])
+
+        # Exceeds max quantity
+        res2 = self.client.post("/api/trade", json={
+            "ticker": "AAPL",
+            "action": "BUY",
+            "shares": 1_000_001
+        }, headers=self.headers)
+        self.assertEqual(res2.status_code, 400)
+        self.assertIn("exceeds maximum allowable limit", res2.get_json()["message"])
+
+        # Invalid action/side
+        res3 = self.client.post("/api/trade", json={
+            "ticker": "AAPL",
+            "action": "HOLD",
+            "shares": 10
+        }, headers=self.headers)
+        self.assertEqual(res3.status_code, 400)
+        self.assertIn("Must be BUY or SELL", res3.get_json()["message"])
+
+
 if __name__ == "__main__":
     unittest.main()

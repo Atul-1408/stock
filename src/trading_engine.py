@@ -81,6 +81,9 @@ def execute_trade(user_id: int, ticker: str, action: str, shares: float, sentime
     if not math.isfinite(shares) or math.isnan(shares) or math.isinf(shares) or shares <= 0:
         return {"success": False, "message": "Shares must be greater than zero."}
 
+    if shares > 1_000_000.0:
+        return {"success": False, "message": "Quantity exceeds maximum allowable limit of 1,000,000."}
+
     price = get_current_price(ticker)
     if price is None or price <= 0:
         return {"success": False, "status_code": 503, "message": "Price unavailable"}

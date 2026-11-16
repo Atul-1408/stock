@@ -718,24 +718,18 @@ def get_bot_status():
 @limiter.limit("30 per minute")
 def make_trade():
     user_id = int(get_jwt_identity())
-    data = request.json
+    data = request.json or {}
     
-    ticker = data.get('ticker')
-    action = data.get('action') 
-    shares = data.get('shares')
+    # Route through validate_order_input so both /api/trade and /api/orders share identical validation
+    is_valid, err_msg, sanitized = validate_order_input(data)
+    if not is_valid:
+        return error_response(err_msg, 400)
+
+    clean_ticker = sanitized['symbol']
+    clean_action = sanitized['side']
+    shares_val = sanitized['quantity']
     sentiment_score = data.get('sentiment_score')
     sentiment_label = data.get('sentiment_label')
-    
-    if not ticker or not action or shares is None:
-        return error_response("Ticker, action, and shares are required.", 400)
-    
-    try:
-        shares_val = float(shares)
-    except (ValueError, TypeError):
-        return error_response("Shares must be a valid number.", 400)
-
-    clean_ticker = str(ticker).strip().upper()
-    clean_action = str(action).strip().upper()
 
     # Prevent rapid duplicate submissions
     if duplicate_detector.is_duplicate(user_id, clean_ticker, clean_action, shares_val, None):
