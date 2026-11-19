@@ -7,11 +7,15 @@ sys.path.append(str(Path(__file__).parent))
 import re
 import threading
 from datetime import timedelta, datetime, timezone
+from functools import wraps
 import json
 import pandas as pd
 from flask import Flask, jsonify, send_from_directory, request, make_response, Response
 from flask_cors import CORS
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import (
+    JWTManager, create_access_token, create_refresh_token, decode_token,
+    jwt_required, get_jwt, get_jwt_identity
+)
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -49,8 +53,14 @@ for warning_msg in config_validation.get("warnings", []):
 
 # JWT Configuration
 app.config['JWT_SECRET_KEY'] = Config.JWT_SECRET_KEY
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=Config.JWT_ACCESS_TOKEN_EXPIRES_DAYS)
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=15)
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=7)
 jwt = JWTManager(app)
+
+@jwt.token_in_blocklist_loader
+def check_if_token_revoked(jwt_header, jwt_payload):
+    jti = jwt_payload.get('jti')
+    return bool(jti and database.is_token_revoked(jti))
 
 @jwt.expired_token_loader
 def expired_token_callback(jwt_header, jwt_payload):
@@ -113,7 +123,34 @@ def _email_key():
 
 
 def _is_admin(user_id: int) -> bool:
-    return user_id in Config.ADMIN_USER_IDS
+    role = database.get_user_role(user_id)
+    return role == 'admin' or user_id in Config.ADMIN_USER_IDS
+
+
+def admin_required():
+    def wrapper(fn):
+        @wraps(fn)
+        @jwt_required()
+        def decorator(*args, **kwargs):
+            user_id = int(get_jwt_identity())
+            if _is_admin(user_id):
+                return fn(*args, **kwargs)
+            return error_response("Admin access required.", 403)
+        return decorator
+    return wrapper
+
+
+def set_auth_cookies(response, refresh_token: str):
+    response.set_cookie(
+        'refresh_token',
+        refresh_token,
+        httponly=True,
+        secure=Config.IS_PRODUCTION or request.is_secure,
+        samesite='Lax',
+        max_age=7 * 24 * 3600,
+        path='/'
+    )
+    return response
 
 
 # ==========================================
@@ -433,7 +470,9 @@ def signup():
 
     if user_id:
         access_token = create_access_token(identity=str(user_id))
-        return jsonify({"status": "success", "access_token": access_token, "user_id": user_id}), 201
+        refresh_token = create_refresh_token(identity=str(user_id))
+        resp = jsonify({"status": "success", "access_token": access_token, "user_id": user_id})
+        return set_auth_cookies(resp, refresh_token), 201
     else:
         return error_response("Failed to create user.", 500)
 
@@ -460,7 +499,9 @@ def login():
         return error_response("Invalid email or password.", 401)
 
     access_token = create_access_token(identity=str(user['id']))
-    return jsonify({"status": "success", "access_token": access_token, "user_id": user['id']}), 200
+    refresh_token = create_refresh_token(identity=str(user['id']))
+    resp = jsonify({"status": "success", "access_token": access_token, "user_id": user['id']})
+    return set_auth_cookies(resp, refresh_token), 200
 
 # ---- OTP Login Routes ----
 @app.route('/api/auth/otp/send', methods=['POST'])
@@ -506,7 +547,9 @@ def verify_otp_route():
         user = database.get_user_by_id(user_id)
 
     access_token = create_access_token(identity=str(user['id']))
-    return jsonify({"status": "success", "access_token": access_token, "user_id": user['id']}), 200
+    refresh_token = create_refresh_token(identity=str(user['id']))
+    resp = jsonify({"status": "success", "access_token": access_token, "user_id": user['id']})
+    return set_auth_cookies(resp, refresh_token), 200
 
 # ---- Google OAuth Route ----
 @app.route('/api/auth/google', methods=['POST'])
@@ -544,12 +587,74 @@ def google_auth():
             return error_response("Failed to create or find user account.", 500)
 
         access_token = create_access_token(identity=str(user['id']))
-        return jsonify({"status": "success", "access_token": access_token, "user_id": user['id']}), 200
+        refresh_token = create_refresh_token(identity=str(user['id']))
+        resp = jsonify({"status": "success", "access_token": access_token, "user_id": user['id']})
+        return set_auth_cookies(resp, refresh_token), 200
     except ValueError:
         return error_response("Invalid Google token.", 401)
     except Exception as e:
         app.logger.error(f"Google auth error: {e}")
         return error_response("Failed to authenticate with Google.", 401)
+
+@app.route('/api/auth/refresh', methods=['POST'])
+@limiter.limit("30 per minute")
+def refresh_token():
+    token = request.cookies.get('refresh_token')
+    if not token:
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:].strip()
+        elif request.is_json and request.json:
+            token = request.json.get('refresh_token')
+
+    if not token:
+        return error_response("Refresh token is required.", 401)
+
+    try:
+        payload = decode_token(token)
+    except Exception:
+        return error_response("Invalid or expired refresh token.", 401)
+
+    jti = payload.get('jti')
+    if jti and database.is_token_revoked(jti):
+        return error_response("Token has been revoked.", 401)
+
+    if payload.get('type') != 'refresh':
+        return error_response("Invalid token type for refresh.", 401)
+
+    user_id = int(payload.get('sub'))
+    user = database.get_user_by_id(user_id)
+    if not user:
+        return error_response("User not found.", 401)
+
+    new_access_token = create_access_token(identity=str(user_id))
+    new_refresh_token = create_refresh_token(identity=str(user_id))
+
+    if jti:
+        database.revoke_token(jti, 'refresh', user_id)
+
+    resp = jsonify({"status": "success", "access_token": new_access_token, "user_id": user_id})
+    return set_auth_cookies(resp, new_refresh_token), 200
+
+@app.route('/api/auth/logout', methods=['POST'])
+@jwt_required(optional=True)
+def logout():
+    jwt_data = get_jwt()
+    if jwt_data:
+        database.revoke_token(jwt_data.get('jti'), jwt_data.get('type', 'access'), int(get_jwt_identity() or 0))
+
+    cookie_token = request.cookies.get('refresh_token')
+    if cookie_token:
+        try:
+            payload = decode_token(cookie_token)
+            if payload.get('jti'):
+                database.revoke_token(payload['jti'], 'refresh', int(payload.get('sub') or 0))
+        except Exception:
+            pass
+
+    resp = jsonify({"status": "success", "message": "Logged out successfully."})
+    resp.delete_cookie('refresh_token', path='/')
+    return resp, 200
 
 @app.route('/api/auth/me', methods=['GET'])
 @jwt_required()
@@ -564,8 +669,10 @@ def get_me():
         "email": user["email"],
         "username": user["username"],
         "full_name": user["full_name"],
-        "current_balance": user["current_balance"]
+        "current_balance": user["current_balance"],
+        "role": user.get("role") or "user"
     }
+    return jsonify({"status": "success", "user": user_data}), 200
     return jsonify({"status": "success", "user": user_data}), 200
 
 # ==========================================
@@ -1097,11 +1204,9 @@ def get_bot_alerts_api():
     return jsonify({'alerts': alerts}), 200
 
 @app.route('/api/alerts/bot-clear', methods=['DELETE'])
-@jwt_required()
+@admin_required()
 def clear_bot_alerts_api():
     # Bot alerts are shared by every user, so only admins may wipe them.
-    if not _is_admin(int(get_jwt_identity())):
-        return error_response("Admin access required.", 403)
     database.clear_bot_alerts()
     return jsonify({'success': True}), 200
 

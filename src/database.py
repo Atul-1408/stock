@@ -50,6 +50,7 @@ def init_db() -> None:
                 avatar_url TEXT,
                 is_public INTEGER DEFAULT 1, -- 1 for True, 0 for False
                 twitter_handle TEXT,
+                role TEXT DEFAULT 'user',
                 created_at TEXT NOT NULL
             )
             """
@@ -197,6 +198,22 @@ def init_db() -> None:
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN twitter_handle TEXT")
         except: pass
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'")
+        except: pass
+
+        # Token blocklist table for JWT revocation
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS token_blocklist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                jti TEXT UNIQUE NOT NULL,
+                token_type TEXT NOT NULL,
+                user_id INTEGER,
+                revoked_at TEXT NOT NULL
+            )
+            """
+        )
 
         # Portfolio holdings
         cursor.execute(
@@ -1013,6 +1030,53 @@ def get_user_by_id(user_id: int) -> Optional[Dict]:
         cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+def get_user_role(user_id: int) -> str:
+    """Get a user's role ('user' or 'admin'). Defaults to 'user'."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        return (row['role'] if row and row['role'] else 'user')
+
+
+def set_user_role(user_id: int, role: str) -> bool:
+    """Update a user's role ('user' or 'admin')."""
+    if role not in ('user', 'admin'):
+        raise ValueError("Role must be 'user' or 'admin'")
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def revoke_token(jti: str, token_type: str, user_id: int = None) -> None:
+    """Add a JWT JTI to the token blocklist."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR IGNORE INTO token_blocklist (jti, token_type, user_id, revoked_at) VALUES (?, ?, ?, ?)",
+                (jti, token_type, user_id, now)
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Error revoking token: {e}")
+
+
+def is_token_revoked(jti: str) -> bool:
+    """Check if a JWT JTI exists in the token blocklist."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM token_blocklist WHERE jti = ?", (jti,))
+            return cursor.fetchone() is not None
+    except Exception as e:
+        logger.error(f"Error checking revoked token: {e}")
+        return False
 
 def get_all_users() -> List[Dict]:
     """Fetch all users for things like leaderboards."""

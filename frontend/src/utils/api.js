@@ -7,6 +7,7 @@ const baseURL = rawBaseUrl.endsWith('/') ? rawBaseUrl.slice(0, -1) : rawBaseUrl;
 const api = axios.create({
     baseURL,
     timeout: 15000, // 15-second timeout to avoid hung connections
+    withCredentials: true,
     headers: {
         'Content-Type': 'application/json',
     },
@@ -31,7 +32,7 @@ api.interceptors.request.use(
 // Response interceptor: structured error handling for 401, 403, 404, 422, 429, 500
 api.interceptors.response.use(
     (response) => response,
-    (error) => {
+    async (error) => {
         if (!error.response) {
             // Network failure or timeout
             if (error.code === 'ECONNABORTED' || error.message?.toLowerCase().includes('timeout')) {
@@ -45,11 +46,13 @@ api.interceptors.response.use(
         const status = error.response.status;
         const resData = error.response.data || {};
         const url = error.config?.url || '';
+        const originalRequest = error.config;
 
         const isAuthEndpoint =
             url.includes('/auth/login') ||
             url.includes('/auth/otp') ||
             url.includes('/auth/google') ||
+            url.includes('/auth/refresh') ||
             url.includes('/auth/signup');
 
         const isAuthPage =
@@ -64,10 +67,26 @@ api.interceptors.response.use(
             error.message ||
             'An unexpected error occurred.';
 
-        // 401: Unauthorized / Token Expired
+        // 401: Unauthorized / Token Expired -> Attempt refresh once
         if (status === 401) {
             friendlyMessage = resData.message || 'Session expired. Please log in again.';
-            if (!isAuthEndpoint && !isAuthPage) {
+            if (!isAuthEndpoint && !isAuthPage && originalRequest && !originalRequest._retry) {
+                originalRequest._retry = true;
+                try {
+                    const refreshRes = await axios.post(`${baseURL}/auth/refresh`, {}, { withCredentials: true });
+                    const newToken = refreshRes.data?.access_token;
+                    if (newToken) {
+                        localStorage.setItem('token', newToken);
+                        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+                        return api(originalRequest);
+                    }
+                } catch (refreshErr) {
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('user_id');
+                    window.location.href = '/login';
+                    return Promise.reject(refreshErr);
+                }
+            } else if (!isAuthEndpoint && !isAuthPage) {
                 localStorage.removeItem('token');
                 localStorage.removeItem('user_id');
                 window.location.href = '/login';
@@ -101,9 +120,12 @@ api.interceptors.response.use(
             friendlyMessage = resData.message || 'The requested financial resource or endpoint was not found.';
         }
 
-        // 429: Rate Limit
+        // 429: Rate Limit with Retry-After header support
         else if (status === 429) {
-            friendlyMessage = resData.message || 'Rate limit reached. Please wait a moment before sending more requests.';
+            const retryAfter = error.response.headers?.['retry-after'];
+            friendlyMessage = retryAfter
+                ? `Too many requests, retry in ${retryAfter} s.`
+                : (resData.message || 'Rate limit reached. Please wait a moment before sending more requests.');
         }
 
         // 500: Server Error

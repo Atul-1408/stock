@@ -143,6 +143,61 @@ class AuditRegressionTests(unittest.TestCase):
         r = self.c.get("/api/stocks/search?q=a&limit=-1")
         self.assertEqual(r.status_code, 200)
 
+    def test_token_refresh_and_rotation(self):
+        # Signup user and receive cookie
+        signup_res = self.c.post("/api/auth/signup", json={
+            "email": "refreshtest@example.com",
+            "password": "Password123!",
+            "username": "refreshtest"
+        })
+        self.assertEqual(signup_res.status_code, 201)
+        self.assertIn("refresh_token", signup_res.headers.get("Set-Cookie", ""))
+
+        # Call refresh
+        refresh_res = self.c.post("/api/auth/refresh")
+        self.assertEqual(refresh_res.status_code, 200)
+        data = refresh_res.get_json()
+        self.assertIn("access_token", data)
+
+        # Test authenticated request with new access token
+        new_headers = {"Authorization": f"Bearer {data['access_token']}"}
+        me_res = self.c.get("/api/auth/me", headers=new_headers)
+        self.assertEqual(me_res.status_code, 200)
+
+    def test_token_logout_blocklist(self):
+        signup_res = self.c.post("/api/auth/signup", json={
+            "email": "logoutuser@example.com",
+            "password": "Password123!",
+            "username": "logoutuser"
+        })
+        self.assertEqual(signup_res.status_code, 201)
+        token = signup_res.get_json()["access_token"]
+        auth_hdr = {"Authorization": f"Bearer {token}"}
+
+        # Logout revokes token
+        logout_res = self.c.post("/api/auth/logout", headers=auth_hdr)
+        self.assertEqual(logout_res.status_code, 200)
+
+        # Subsequent use of revoked token must return 401
+        me_res = self.c.get("/api/auth/me", headers=auth_hdr)
+        self.assertEqual(me_res.status_code, 401)
+
+    def test_admin_role_authorization(self):
+        # Default user is role 'user' and rejected
+        user_res = self.c.delete("/api/alerts/bot-clear", headers=self.h2)
+        self.assertEqual(user_res.status_code, 403)
+
+        # Promote user to admin
+        database.set_user_role(self.u2, "admin")
+        self.assertEqual(database.get_user_role(self.u2), "admin")
+
+        # Now admin can clear bot alerts
+        admin_res = self.c.delete("/api/alerts/bot-clear", headers=self.h2)
+        self.assertEqual(admin_res.status_code, 200)
+
+        # Demote back
+        database.set_user_role(self.u2, "user")
+
 
 if __name__ == "__main__":
     unittest.main()
