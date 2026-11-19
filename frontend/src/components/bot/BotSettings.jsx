@@ -27,9 +27,15 @@ function BotSettings({ onUpdate }) {
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
+    let parsedValue = value;
+    if (type === "checkbox") {
+      parsedValue = checked ? 1 : 0;
+    } else if (type === "number") {
+      parsedValue = value === "" ? "" : Number(value);
+    }
     setConfig((prev) => ({
       ...prev,
-      [name]: type === "checkbox" ? (checked ? 1 : 0) : value
+      [name]: parsedValue
     }));
   };
 
@@ -38,13 +44,40 @@ function BotSettings({ onUpdate }) {
     setSaving(true);
     setMessage("");
     setError("");
+
+    // DECISION: Enforce stop_loss_pct and take_profit_pct as fractions (0 < x <= 1) and max_trades_per_day between 1 and 100
+    if (config.stop_loss_pct !== undefined && config.stop_loss_pct !== "") {
+      const sl = Number(config.stop_loss_pct);
+      if (isNaN(sl) || sl <= 0 || sl > 1) {
+        setError("Stop loss must be a fraction between 0 and 1 (e.g., 0.05 for 5%).");
+        setSaving(false);
+        return;
+      }
+    }
+    if (config.take_profit_pct !== undefined && config.take_profit_pct !== "") {
+      const tp = Number(config.take_profit_pct);
+      if (isNaN(tp) || tp <= 0 || tp > 1) {
+        setError("Take profit must be a fraction between 0 and 1 (e.g., 0.10 for 10%).");
+        setSaving(false);
+        return;
+      }
+    }
+    if (config.max_trades_per_day !== undefined && config.max_trades_per_day !== "") {
+      const mtd = Number(config.max_trades_per_day);
+      if (isNaN(mtd) || mtd < 1 || mtd > 100 || !Number.isInteger(mtd)) {
+        setError("Max trades per day must be an integer between 1 and 100.");
+        setSaving(false);
+        return;
+      }
+    }
+
     try {
       await api.put("/bot/config", config);
       setMessage("Strategy parameters successfully synchronized.");
       setTimeout(() => setMessage(""), 3500);
       onUpdate?.();
     } catch (err) {
-      setError("Failed to persist strategy configuration.");
+      setError(err?.response?.data?.message || "Failed to persist strategy configuration.");
     } finally {
       setSaving(false);
     }
@@ -164,16 +197,16 @@ function BotSettings({ onUpdate }) {
           {/* Stop Loss % */}
           <div>
             <label className="block font-mono text-2xs uppercase tracking-wider text-slate-300 mb-1.5">
-              Hard Stop Loss Ratio (e.g. 0.05 = 5%)
+              Hard Stop Loss Ratio (0 &lt; x &le; 1, e.g. 0.05 = 5%)
             </label>
             <input
               type="number"
               name="stop_loss_pct"
               value={config.stop_loss_pct ?? 0.05}
               onChange={handleChange}
-              min="0.01"
-              max="0.5"
-              step="0.01"
+              min="0.001"
+              max="1.0"
+              step="0.005"
               className="w-full bg-terminal-950 border border-terminal-700 rounded px-3 py-2 font-mono text-xs text-slate-100 font-num focus:outline-none focus:border-terminal-cyan"
             />
           </div>
@@ -181,16 +214,16 @@ function BotSettings({ onUpdate }) {
           {/* Take Profit % */}
           <div>
             <label className="block font-mono text-2xs uppercase tracking-wider text-slate-300 mb-1.5">
-              Take Profit Target Ratio (e.g. 0.10 = 10%)
+              Take Profit Target Ratio (0 &lt; x &le; 1, e.g. 0.10 = 10%)
             </label>
             <input
               type="number"
               name="take_profit_pct"
               value={config.take_profit_pct ?? 0.1}
               onChange={handleChange}
-              min="0.01"
+              min="0.001"
               max="1.0"
-              step="0.01"
+              step="0.005"
               className="w-full bg-terminal-950 border border-terminal-700 rounded px-3 py-2 font-mono text-xs text-slate-100 font-num focus:outline-none focus:border-terminal-cyan"
             />
           </div>
@@ -198,7 +231,7 @@ function BotSettings({ onUpdate }) {
           {/* Max Trades Per Day */}
           <div>
             <label className="block font-mono text-2xs uppercase tracking-wider text-slate-300 mb-1.5">
-              Max Daily Executions Cap
+              Max Daily Executions Cap (1 - 100)
             </label>
             <input
               type="number"
@@ -207,6 +240,7 @@ function BotSettings({ onUpdate }) {
               onChange={handleChange}
               min="1"
               max="100"
+              step="1"
               className="w-full bg-terminal-950 border border-terminal-700 rounded px-3 py-2 font-mono text-xs text-slate-100 font-num focus:outline-none focus:border-terminal-cyan"
             />
           </div>

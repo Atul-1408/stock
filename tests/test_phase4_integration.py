@@ -406,6 +406,46 @@ class TestPhase4Integration(unittest.TestCase):
         del_res = self.client.delete("/api/bot/watchlist/TSLA", headers=self.headers)
         self.assertEqual(del_res.status_code, 200)
 
+    def test_18b_bot_config_semantics_validation(self):
+        """Verify strict fraction semantics for stop_loss_pct / take_profit_pct and 1-100 max_trades_per_day."""
+        # Reject percentage style stop_loss > 1
+        res = self.client.put("/api/bot/config", headers=self.headers, json={"stop_loss_pct": 5.0})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("error", json.loads(res.data)["status"])
+
+        # Reject negative or zero stop loss
+        res = self.client.put("/api/bot/config", headers=self.headers, json={"stop_loss_pct": 0.0})
+        self.assertEqual(res.status_code, 400)
+
+        # Reject percentage style take profit > 1
+        res = self.client.put("/api/bot/config", headers=self.headers, json={"take_profit_pct": 10.0})
+        self.assertEqual(res.status_code, 400)
+
+        # Reject zero take profit
+        res = self.client.put("/api/bot/config", headers=self.headers, json={"take_profit_pct": -0.05})
+        self.assertEqual(res.status_code, 400)
+
+        # Reject out of bounds max_trades_per_day
+        res = self.client.put("/api/bot/config", headers=self.headers, json={"max_trades_per_day": 0})
+        self.assertEqual(res.status_code, 400)
+        res = self.client.put("/api/bot/config", headers=self.headers, json={"max_trades_per_day": 101})
+        self.assertEqual(res.status_code, 400)
+
+        # Accept valid fractions and valid max_trades_per_day
+        res = self.client.put("/api/bot/config", headers=self.headers, json={
+            "stop_loss_pct": 0.03,
+            "take_profit_pct": 0.08,
+            "max_trades_per_day": 25
+        })
+        self.assertEqual(res.status_code, 200)
+
+        # Verify values persisted
+        verify = self.client.get("/api/bot/config", headers=self.headers)
+        cfg = json.loads(verify.data)["config"]
+        self.assertAlmostEqual(cfg["stop_loss_pct"], 0.03)
+        self.assertAlmostEqual(cfg["take_profit_pct"], 0.08)
+        self.assertEqual(cfg["max_trades_per_day"], 25)
+
     # ---------------------------------------------------------
     # 8. ALERTS & NEURAL INTELLIGENCE DESK
     # ---------------------------------------------------------

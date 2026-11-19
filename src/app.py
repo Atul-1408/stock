@@ -564,11 +564,39 @@ def get_bot_config():
 def update_bot_config():
     """Update bot configuration"""
     user_id = int(get_jwt_identity())
-    data = request.json
+    data = request.json or {}
     
+    # DECISION: Enforce stop_loss_pct and take_profit_pct as fractions (0 < x <= 1) and max_trades_per_day between 1 and 100.
+    if 'stop_loss_pct' in data:
+        try:
+            sl = float(data['stop_loss_pct'])
+            if sl <= 0 or sl > 1.0:
+                return jsonify({'status': 'error', 'message': 'stop_loss_pct must be a fraction between 0 and 1'}), 400
+            data['stop_loss_pct'] = sl
+        except (ValueError, TypeError):
+            return jsonify({'status': 'error', 'message': 'stop_loss_pct must be a valid number'}), 400
+
+    if 'take_profit_pct' in data:
+        try:
+            tp = float(data['take_profit_pct'])
+            if tp <= 0 or tp > 1.0:
+                return jsonify({'status': 'error', 'message': 'take_profit_pct must be a fraction between 0 and 1'}), 400
+            data['take_profit_pct'] = tp
+        except (ValueError, TypeError):
+            return jsonify({'status': 'error', 'message': 'take_profit_pct must be a valid number'}), 400
+
+    if 'max_trades_per_day' in data:
+        try:
+            mtd = int(data['max_trades_per_day'])
+            if mtd < 1 or mtd > 100:
+                return jsonify({'status': 'error', 'message': 'max_trades_per_day must be an integer between 1 and 100'}), 400
+            data['max_trades_per_day'] = mtd
+        except (ValueError, TypeError):
+            return jsonify({'status': 'error', 'message': 'max_trades_per_day must be a valid integer'}), 400
+            
     database.update_bot_config(user_id, data)
     
-    return jsonify({'success': True}), 200
+    return jsonify({'success': True, 'status': 'success'}), 200
 
 @app.route('/api/bot/start', methods=['POST'])
 @jwt_required()

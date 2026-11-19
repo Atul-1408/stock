@@ -2517,6 +2517,25 @@ def create_bot_config(user_id: int) -> None:
 
 
 def update_bot_config(user_id: int, data: Dict) -> bool:
+    # DECISION: Enforce stop_loss_pct and take_profit_pct as fractions (0 < x <= 1) and max_trades_per_day between 1 and 100.
+    if 'stop_loss_pct' in data:
+        sl = float(data['stop_loss_pct'])
+        if sl <= 0 or sl > 1.0:
+            raise ValueError("stop_loss_pct must be a fraction between 0 and 1")
+        data['stop_loss_pct'] = sl
+
+    if 'take_profit_pct' in data:
+        tp = float(data['take_profit_pct'])
+        if tp <= 0 or tp > 1.0:
+            raise ValueError("take_profit_pct must be a fraction between 0 and 1")
+        data['take_profit_pct'] = tp
+
+    if 'max_trades_per_day' in data:
+        mtd = int(data['max_trades_per_day'])
+        if mtd < 1 or mtd > 100:
+            raise ValueError("max_trades_per_day must be an integer between 1 and 100")
+        data['max_trades_per_day'] = mtd
+
     now = datetime.now(timezone.utc).isoformat()
     # Fields that can be updated
     fields = [
@@ -2537,6 +2556,10 @@ def update_bot_config(user_id: int, data: Dict) -> bool:
     if not set_clauses:
         return False
         
+    # Ensure bot config row exists for user
+    if not get_bot_config(user_id):
+        create_bot_config(user_id)
+
     set_clauses.append("updated_at = ?")
     params.append(now)
     params.append(user_id)
