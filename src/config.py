@@ -36,6 +36,12 @@ class Config:
 
     JWT_ACCESS_TOKEN_EXPIRES_DAYS = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES_DAYS", "7"))
 
+    # Public base URL used for canonical links, sitemap and social tags (no trailing slash)
+    SITE_URL = os.getenv("SITE_URL", "").rstrip("/")
+
+    # Comma-separated user IDs allowed to run admin-only actions (e.g. clearing global bot alerts)
+    ADMIN_USER_IDS = {int(x) for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip().isdigit()}
+
     # CORS Allowed Origins
     _default_cors = [
         "http://localhost:5173",
@@ -99,6 +105,9 @@ class Config:
         if cls.IS_PRODUCTION:
             if not cls.JWT_SECRET_KEY or len(cls.JWT_SECRET_KEY) < 32:
                 errors.append("JWT_SECRET_KEY must be at least 32 characters in production.")
+
+            if any(tok in cls.JWT_SECRET_KEY.lower() for tok in ("your_jwt_secret", "change_in_production", "changeme")):
+                errors.append("JWT_SECRET_KEY is still the .env.example placeholder. Generate one: openssl rand -hex 32")
 
             if "*" in cls.CORS_ALLOWED_ORIGINS:
                 errors.append("Wildcard '*' in CORS_ALLOWED_ORIGINS is prohibited in production.")

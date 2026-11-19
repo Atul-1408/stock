@@ -16,6 +16,9 @@ import BotDashboard from "./components/bot/BotDashboard";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
 import MarketWatch from "./pages/MarketWatch";
+import LandingPage from "./pages/LandingPage";
+import NotFoundPage from "./pages/NotFoundPage";
+import Seo from "./utils/seo";
 import { CurrencyProvider } from "./contexts/CurrencyContext";
 
 function App() {
@@ -59,8 +62,9 @@ function App() {
     localStorage.setItem("theme", nextTheme ? "dark" : "light");
   };
 
-  const renderProtectedView = (Component) => (
+  const renderProtectedView = (Component, title = "Terminal") => (
     <ProtectedRoute>
+      <Seo title={title} noindex />
       <TerminalLayout
         hasNewNotifs={hasNewNotifs}
         isNotifOpen={isNotifOpen}
@@ -85,17 +89,17 @@ function App() {
             <Route path="/signup" element={<SignupPage />} />
 
             {/* Institutional Protected Routes */}
-            <Route path="/dashboard" element={renderProtectedView(Dashboard)} />
-            <Route path="/market" element={renderProtectedView(MarketWatch)} />
-            <Route path="/analytics" element={renderProtectedView(AnalyticsDashboard)} />
-            <Route path="/alerts" element={renderProtectedView(AlertsPage)} />
-            <Route path="/leaderboard" element={renderProtectedView(LeaderboardPage)} />
-            <Route path="/chat" element={renderProtectedView(ChatbotPanel)} />
-            <Route path="/bot" element={renderProtectedView(BotDashboard)} />
+            <Route path="/dashboard" element={renderProtectedView(Dashboard, "Dashboard")} />
+            <Route path="/market" element={renderProtectedView(MarketWatch, "Market Watch")} />
+            <Route path="/analytics" element={renderProtectedView(AnalyticsDashboard, "Analytics")} />
+            <Route path="/alerts" element={renderProtectedView(AlertsPage, "Alerts")} />
+            <Route path="/leaderboard" element={renderProtectedView(LeaderboardPage, "Leaderboard")} />
+            <Route path="/chat" element={renderProtectedView(ChatbotPanel, "AI Assistant")} />
+            <Route path="/bot" element={renderProtectedView(BotDashboard, "Trading Bot")} />
 
-            {/* Default Fallback */}
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            {/* Public landing page + real 404 (no more redirect loop to /login) */}
+            <Route path="/" element={<LandingPage />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
 
           <ToastContainer

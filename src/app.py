@@ -4,11 +4,12 @@ from pathlib import Path
 # Fix import path for subpackages
 sys.path.append(str(Path(__file__).parent))
 
+import re
 import threading
 from datetime import timedelta, datetime, timezone
 import json
 import pandas as pd
-from flask import Flask, jsonify, send_from_directory, request
+from flask import Flask, jsonify, send_from_directory, request, make_response, Response
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -104,6 +105,17 @@ limiter = Limiter(
     storage_uri=Config.RATELIMIT_STORAGE_URI
 )
 
+def _email_key():
+    """Rate-limit key per target email so OTP guessing can't be spread across IPs."""
+    data = request.get_json(silent=True)
+    email = (data.get('email') if isinstance(data, dict) else '') or ''
+    return f"otp:{str(email).strip().lower()}" if email else get_remote_address()
+
+
+def _is_admin(user_id: int) -> bool:
+    return user_id in Config.ADMIN_USER_IDS
+
+
 # ==========================================
 # HEALTH & OBSERVABILITY PROBES
 # ==========================================
@@ -126,12 +138,10 @@ def health_check():
 
     return jsonify({
         "status": overall_status,
-        "environment": Config.ENVIRONMENT,
         "trading_mode": Config.TRADING_MODE,
         "live_trading_enabled": Config.IS_LIVE_TRADING_ENABLED,
         "database": "connected" if db_ok else "unreachable",
-        "database_error": db_error,
-        "workers": worker_status,
+        "workers": {name: info.get("status") for name, info in (worker_status.get("workers") or {}).items()},
         "timestamp": datetime.now(timezone.utc).isoformat()
     }), (200 if db_ok else 503)
 
@@ -152,7 +162,9 @@ def readiness_probe():
             conn.execute("SELECT 1;").fetchone()
         return jsonify({"status": "ready"}), 200
     except Exception as e:
-        return jsonify({"status": "not_ready", "error": str(e)}), 503
+        app.logger.error(f"Readiness probe failed: {e}")
+        return jsonify({"status": "not_ready"}), 503
+
 
 # In-memory cache for high-traffic public endpoints
 _ticker_tape_cache = {
@@ -190,6 +202,19 @@ class _BotThreadCompat:
         return worker_manager.is_running("trading_bot")
 
 bot_thread = _BotThreadCompat()
+
+_TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-&^=]{0,19}$")
+
+
+def _valid_ticker(t: str) -> bool:
+    return bool(t) and bool(_TICKER_RE.fullmatch(t))
+
+
+def json_body() -> dict:
+    """Return the request JSON as a dict. Never None, never raises on `null`/non-object bodies."""
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
+
 
 def error_response(message: str, status_code: int = 400):
     """Return a standardized JSON error response."""
@@ -376,6 +401,7 @@ def health() -> tuple:
 
 
 @app.route("/api/workers/health", methods=["GET"])
+@jwt_required()
 def workers_health():
     """Detailed health check for all background workers."""
     return jsonify(worker_manager.get_health_status()), 200
@@ -387,7 +413,7 @@ def workers_health():
 @app.route('/api/auth/signup', methods=['POST'])
 @limiter.limit("5 per hour")
 def signup():
-    data = request.json or {}
+    data = json_body()
     email = (data.get('email') or '').strip().lower()
     password = data.get('password')
     username = (data.get('username') or '').strip()
@@ -414,7 +440,7 @@ def signup():
 @app.route('/api/auth/login', methods=['POST'])
 @limiter.limit("20 per hour; 5 per minute")
 def login():
-    data = request.json or {}
+    data = json_body()
     email = (data.get('email') or '').strip().lower()
     password = data.get('password')
 
@@ -439,13 +465,14 @@ def login():
 # ---- OTP Login Routes ----
 @app.route('/api/auth/otp/send', methods=['POST'])
 @limiter.limit("5 per minute")
+@limiter.limit("3 per 10 minutes", key_func=_email_key)
 def send_otp():
     import otp_service
     from datetime import timezone
-    data = request.json or {}
+    data = json_body()
     email = (data.get('email') or '').strip().lower()
-    if not email:
-        return error_response("Email is required.", 400)
+    if not email or '@' not in email or len(email) > 254:
+        return error_response("A valid email is required.", 400)
 
     code = otp_service.generate_otp()
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
@@ -459,8 +486,9 @@ def send_otp():
 
 @app.route('/api/auth/otp/verify', methods=['POST'])
 @limiter.limit("10 per minute")
+@limiter.limit("5 per 5 minutes", key_func=_email_key)
 def verify_otp_route():
-    data = request.json or {}
+    data = json_body()
     email = (data.get('email') or '').strip().lower()
     otp = (data.get('otp') or '').strip()
 
@@ -487,7 +515,7 @@ def google_auth():
     from google.oauth2 import id_token
     from google.auth.transport import requests as google_requests
 
-    data = request.json or {}
+    data = json_body()
     credential = data.get('credential')
     if not credential:
         return error_response("Google credential is required.", 400)
@@ -564,38 +592,27 @@ def get_bot_config():
 def update_bot_config():
     """Update bot configuration"""
     user_id = int(get_jwt_identity())
-    data = request.json or {}
-    
+    data = json_body()
     # DECISION: Enforce stop_loss_pct and take_profit_pct as fractions (0 < x <= 1) and max_trades_per_day between 1 and 100.
-    if 'stop_loss_pct' in data:
-        try:
-            sl = float(data['stop_loss_pct'])
-            if sl <= 0 or sl > 1.0:
-                return jsonify({'status': 'error', 'message': 'stop_loss_pct must be a fraction between 0 and 1'}), 400
-            data['stop_loss_pct'] = sl
-        except (ValueError, TypeError):
-            return jsonify({'status': 'error', 'message': 'stop_loss_pct must be a valid number'}), 400
+    ranges = {'max_position_size': (0, 1e9), 'stop_loss_pct': (0.0001, 1), 'take_profit_pct': (0.0001, 1),
+              'min_sentiment_score': (-1, 1), 'max_trades_per_day': (1, 100)}
+    for key, (lo, hi) in ranges.items():
+        if key in data:
+            try:
+                val = float(data[key])
+            except (TypeError, ValueError):
+                return error_response(f"{key} must be a number.", 400)
+            if not (lo <= val <= hi):
+                return error_response(f"{key} must be between {lo} and {hi}.", 400)
+            if key == 'max_trades_per_day':
+                data[key] = int(val)
+            else:
+                data[key] = val
+    if 'risk_level' in data and str(data['risk_level']).upper() not in ('LOW', 'MED', 'MEDIUM', 'HIGH'):
+        return error_response("risk_level must be LOW, MED or HIGH.", 400)
 
-    if 'take_profit_pct' in data:
-        try:
-            tp = float(data['take_profit_pct'])
-            if tp <= 0 or tp > 1.0:
-                return jsonify({'status': 'error', 'message': 'take_profit_pct must be a fraction between 0 and 1'}), 400
-            data['take_profit_pct'] = tp
-        except (ValueError, TypeError):
-            return jsonify({'status': 'error', 'message': 'take_profit_pct must be a valid number'}), 400
-
-    if 'max_trades_per_day' in data:
-        try:
-            mtd = int(data['max_trades_per_day'])
-            if mtd < 1 or mtd > 100:
-                return jsonify({'status': 'error', 'message': 'max_trades_per_day must be an integer between 1 and 100'}), 400
-            data['max_trades_per_day'] = mtd
-        except (ValueError, TypeError):
-            return jsonify({'status': 'error', 'message': 'max_trades_per_day must be a valid integer'}), 400
-            
     database.update_bot_config(user_id, data)
-    
+
     return jsonify({'success': True, 'status': 'success'}), 200
 
 @app.route('/api/bot/start', methods=['POST'])
@@ -634,10 +651,12 @@ def get_bot_watchlist():
 def add_to_watchlist():
     """Add stock to bot watchlist"""
     user_id = int(get_jwt_identity())
-    data = request.json
+    data = json_body()
     
-    ticker = data.get('ticker')
-    
+    ticker = str(data.get('ticker') or '').strip().upper()
+    if not _valid_ticker(ticker):
+        return error_response("A valid ticker is required.", 400)
+
     try:
         database.add_to_bot_watchlist(user_id, ticker)
         return jsonify({'success': True}), 201
@@ -746,7 +765,7 @@ def get_bot_status():
 @limiter.limit("30 per minute")
 def make_trade():
     user_id = int(get_jwt_identity())
-    data = request.json or {}
+    data = json_body()
     
     # Route through validate_order_input so both /api/trade and /api/orders share identical validation
     is_valid, err_msg, sanitized = validate_order_input(data)
@@ -911,14 +930,17 @@ def get_stock_analysis(ticker):
 @jwt_required()
 def update_profile():
     user_id = int(get_jwt_identity())
-    data = request.json
-    database.update_user_profile(
-        user_id, 
-        data.get('bio', ''), 
-        data.get('avatar_url', ''), 
-        data.get('is_public', True), 
-        data.get('twitter_handle', '')
-    )
+    data = json_body()
+    bio = str(data.get('bio') or '')
+    avatar_url = str(data.get('avatar_url') or '').strip()
+    handle = str(data.get('twitter_handle') or '').strip().lstrip('@')
+    if len(bio) > 500:
+        return error_response("Bio must be 500 characters or fewer.", 400)
+    if avatar_url and not re.match(r'^https?://', avatar_url, re.I):
+        return error_response("avatar_url must start with http:// or https://", 400)
+    if len(avatar_url) > 500 or (handle and not re.fullmatch(r'[A-Za-z0-9_]{1,15}', handle)):
+        return error_response("Invalid avatar_url or twitter_handle.", 400)
+    database.update_user_profile(user_id, bio, avatar_url, data.get('is_public', True), handle)
     return jsonify({"status": "success", "message": "Profile updated."}), 200
 
 @app.route('/api/profile/summary/<int:user_id>', methods=['GET'])
@@ -953,7 +975,7 @@ def get_analytics_overview_api():
 @jwt_required()
 def get_analytics_history_api():
     user_id = int(get_jwt_identity())
-    days = request.args.get('days', default=30, type=int)
+    days = max(1, min(request.args.get('days', default=30, type=int) or 30, 3650))
     history = analytics_engine.get_portfolio_history(user_id, days=days)
 
     if days and isinstance(days, int) and days > 0:
@@ -1029,7 +1051,10 @@ def get_user_alerts():
 @jwt_required()
 def create_alert():
     user_id = int(get_jwt_identity())
-    data = request.json
+    data = json_body()
+    if not data.get('ticker') or not data.get('alert_type'):
+        return error_response("ticker and alert_type are required.", 400)
+    data['ticker'] = str(data['ticker']).strip().upper()
     alert_id = database.create_alert_rule(user_id, data['ticker'], data['alert_type'], data.get('condition_operator'), data.get('threshold_value'), data.get('notification_method', 'email'))
     return jsonify({'success': True, 'alert_id': alert_id}), 201
 
@@ -1046,7 +1071,7 @@ def delete_alert(alert_id):
 def toggle_alert(alert_id):
     user_id = int(get_jwt_identity())
     if not database.verify_alert_ownership(alert_id, user_id): return error_response("Unauthorized", 403)
-    database.toggle_alert_rule(alert_id, request.json.get('is_active'))
+    database.toggle_alert_rule(alert_id, json_body().get('is_active'))
     return jsonify({'success': True}), 200
 
 
@@ -1074,6 +1099,9 @@ def get_bot_alerts_api():
 @app.route('/api/alerts/bot-clear', methods=['DELETE'])
 @jwt_required()
 def clear_bot_alerts_api():
+    # Bot alerts are shared by every user, so only admins may wipe them.
+    if not _is_admin(int(get_jwt_identity())):
+        return error_response("Admin access required.", 403)
     database.clear_bot_alerts()
     return jsonify({'success': True}), 200
 
@@ -1091,9 +1119,18 @@ def get_chat_conversations_api():
 @jwt_required()
 def create_conversation_api():
     user_id = int(get_jwt_identity())
-    title = request.json.get('title', f"Chat {datetime.now().strftime('%d/%m %H:%M')}")
+    title = json_body().get('title', f"Chat {datetime.now().strftime('%d/%m %H:%M')}")
     conv_id = database.create_new_conversation(user_id, title)
     return jsonify({'conversation_id': conv_id, 'title': title}), 201
+
+@app.route('/api/chat/<int:conversation_id>', methods=['DELETE'])
+@jwt_required()
+def delete_conversation_api(conversation_id):
+    user_id = int(get_jwt_identity())
+    if not database.delete_conversation(conversation_id, user_id):
+        return error_response("Conversation not found.", 404)
+    return jsonify({'success': True}), 200
+
 
 @app.route('/api/chat/<int:conversation_id>/messages', methods=['GET'])
 @jwt_required()
@@ -1108,8 +1145,9 @@ def get_conversation_messages_api(conversation_id):
 @limiter.limit("10 per minute")
 def send_chat_message_api(conversation_id):
     user_id = int(get_jwt_identity())
-    user_message = request.json.get('message')
+    user_message = str(json_body().get('message') or '').strip()
     if not user_message: return error_response("Message required", 400)
+    if len(user_message) > 2000: return error_response("Message too long (max 2000 characters).", 400)
     if not database.verify_conversation_ownership(conversation_id, user_id): return error_response("Unauthorized", 403)
     
     history = database.get_conversation_history(conversation_id)
@@ -1143,6 +1181,7 @@ def chat_analyze_stock_api(ticker):
 # LEADERBOARD & SOCIAL ROUTES
 # ==========================================
 @app.route('/api/leaderboard', methods=['GET'])
+@limiter.limit("60 per minute")
 def get_leaderboard_api():
     period = request.args.get('period', 'all_time')
     board = leaderboard_engine.get_global_leaderboard(period)
@@ -1161,6 +1200,10 @@ def get_my_rank_api():
 @jwt_required()
 def follow_user_api(following_id):
     follower_id = int(get_jwt_identity())
+    if follower_id == following_id:
+        return error_response("You cannot follow yourself.", 400)
+    if not database.get_user_by_id(following_id):
+        return error_response("User not found.", 404)
     database.create_follow(follower_id, following_id)
     return jsonify({'success': True}), 201
 
@@ -1175,7 +1218,10 @@ def unfollow_user_api(following_id):
 @jwt_required()
 def share_trade_api():
     user_id = int(get_jwt_identity())
-    d = request.json
+    d = json_body()
+    missing = [k for k in ('ticker', 'action', 'entry', 'target', 'sentiment', 'reasoning') if k not in d]
+    if missing:
+        return error_response(f"Missing fields: {', '.join(missing)}", 400)
     trade_id = database.create_shared_trade(user_id, d['ticker'], d['action'], d['entry'], d['target'], d['sentiment'], d['reasoning'])
     return jsonify({'trade_id': trade_id}), 201
 
@@ -1200,6 +1246,8 @@ def get_user_trades_api(user_id):
 @jwt_required()
 def like_trade_api(trade_id):
     user_id = int(get_jwt_identity())
+    if not database.shared_trade_visible(trade_id, user_id):
+        return error_response("Trade not found.", 404)
     database.create_trade_like(trade_id, user_id)
     database.update_likes_count(trade_id)
     return jsonify({'success': True}), 200
@@ -1208,7 +1256,11 @@ def like_trade_api(trade_id):
 @jwt_required()
 def comment_trade_api(trade_id):
     user_id = int(get_jwt_identity())
-    text = request.json.get('comment')
+    text = str(json_body().get('comment') or '').strip()
+    if not text or len(text) > 1000:
+        return error_response("Comment must be 1-1000 characters.", 400)
+    if not database.shared_trade_visible(trade_id, user_id):
+        return error_response("Trade not found.", 404)
     comment_id = database.create_trade_comment(trade_id, user_id, text)
     database.update_comments_count(trade_id)
     return jsonify({'comment_id': comment_id}), 201
@@ -1293,16 +1345,20 @@ def get_exchange_rates():
 
 
 @app.route('/api/currency/convert', methods=['POST'])
+@limiter.limit("60 per minute")
 def convert_currency_api():
     """Convert amount between currencies."""
     try:
         from currency_converter import currency_converter as cc
     except ImportError:
         return error_response('Currency converter not available', 500)
-    data = request.json
-    amount = data.get('amount', 0)
-    from_c = data.get('from', 'USD')
-    to_c = data.get('to', 'INR')
+    data = json_body()
+    try:
+        amount = float(data.get('amount', 0))
+    except (TypeError, ValueError):
+        return error_response("amount must be a number.", 400)
+    from_c = str(data.get('from', 'USD')).upper()[:5]
+    to_c = str(data.get('to', 'INR')).upper()[:5]
     try:
         converted = cc.convert(amount, from_c, to_c)
         return jsonify({
@@ -1312,7 +1368,8 @@ def convert_currency_api():
             'rate': cc.get_rate(from_c, to_c),
         }), 200
     except Exception as e:
-        return error_response(str(e), 400)
+        app.logger.warning(f"Currency conversion failed: {e}")
+        return error_response("Unsupported currency or invalid amount.", 400)
 
 
 @app.route('/api/user/currency', methods=['PUT'])
@@ -1320,7 +1377,7 @@ def convert_currency_api():
 def update_user_currency():
     """Update user's preferred currency."""
     user_id = int(get_jwt_identity())
-    currency = request.json.get('currency', 'USD')
+    currency = json_body().get('currency', 'USD')
     database.set_user_preferred_currency(user_id, currency)
     return jsonify({'status': 'success', 'currency': currency}), 200
 
@@ -1339,12 +1396,13 @@ def get_user_currency():
 # ==========================================
 
 @app.route('/api/market/watch', methods=['GET'])
+@limiter.limit("120 per minute")
 def get_market_watch():
     """Get market watchlist with filters and optional currency conversion."""
     exchange = request.args.get('exchange', 'all')
     sector = request.args.get('sector', 'all')
     search = request.args.get('search', '')
-    limit = request.args.get('limit', 50, type=int)
+    limit = max(1, min(request.args.get('limit', 50, type=int) or 50, 100))
     target_currency = request.args.get('currency', '')  # optional conversion
 
     stocks = database.search_stock_universe(search, exchange, sector, limit)
@@ -1401,17 +1459,24 @@ def get_market_watch():
 
 
 @app.route('/api/stocks/search', methods=['GET'])
+@limiter.limit("120 per minute")
 def search_stocks_api():
     """Quick search stocks by symbol or name."""
     query = request.args.get('q', '')
-    limit = request.args.get('limit', 20, type=int)
+    limit = max(1, min(request.args.get('limit', 20, type=int) or 20, 100))
+    query = query[:50]
     results = database.search_stock_universe(query, limit=limit)
     return jsonify({'results': results}), 200
 
 
 @app.route('/api/stocks/<symbol>/details', methods=['GET'])
+@jwt_required()
+@limiter.limit("30 per minute")
 def get_stock_details(symbol):
     """Get detailed stock information."""
+    symbol = symbol.strip().upper()
+    if not _valid_ticker(symbol):
+        return error_response("Invalid ticker symbol.", 400)
     stock_info = database.get_stock_from_universe(symbol)
     if not stock_info:
         try:
@@ -1459,7 +1524,7 @@ def get_market_indices():
 def place_order():
     """Place a new order with balance and position authorization."""
     user_id = int(get_jwt_identity())
-    data = request.json or {}
+    data = json_body()
 
     is_valid, err_msg, sanitized = validate_order_input(data)
     if not is_valid:
@@ -1491,7 +1556,7 @@ def place_order():
 
     validation_price = market_price if order_type == 'MARKET' else (limit_price or market_price)
     if not validation_price or validation_price <= 0:
-        return error_response(f"Could not determine valid price for {symbol}.", 400)
+        return error_response(f"Live price for {symbol} is unavailable right now. Please try again shortly.", 503)
 
     # Auto-fill MARKET orders atomically
     if order_type == 'MARKET':
@@ -1640,16 +1705,72 @@ def get_positions():
 # ==========================================
 # STATIC SERVING & FALLBACK
 # ==========================================
+# SPA pages the React router knows about. Anything else must return a real HTTP 404
+# (not 200) so search engines do not index "soft 404" pages.
+SPA_ROUTES = {"", "login", "signup", "dashboard", "market", "analytics", "alerts", "leaderboard", "chat", "bot"}
+PUBLIC_SEO_PAGES = [("/", "1.0", "weekly"), ("/signup", "0.8", "monthly"), ("/login", "0.5", "monthly")]
+
+
+def _site_url() -> str:
+    return Config.SITE_URL or request.url_root.rstrip("/")
+
+
+def _render_index(status: int = 200):
+    index_file = os.path.join(app.static_folder, "index.html")
+    if not os.path.exists(index_file):
+        return jsonify({"status": "error", "message": "Frontend is not built. Run: cd frontend && npm run build"}), 404
+    with open(index_file, encoding="utf-8") as fh:
+        html = fh.read().replace("__SITE_URL__", _site_url())
+    resp = make_response(html, status)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    body = (
+        "User-agent: *\n"
+        "Allow: /$\nAllow: /login\nAllow: /signup\nAllow: /assets/\n"
+        "Disallow: /api/\nDisallow: /dashboard\nDisallow: /market\nDisallow: /analytics\n"
+        "Disallow: /alerts\nDisallow: /leaderboard\nDisallow: /chat\nDisallow: /bot\n\n"
+        f"Sitemap: {_site_url()}/sitemap.xml\n"
+    )
+    return Response(body, mimetype="text/plain")
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    base = _site_url()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    urls = "".join(
+        f"<url><loc>{base}{loc}</loc><lastmod>{today}</lastmod><changefreq>{freq}</changefreq><priority>{prio}</priority></url>"
+        for loc, prio, freq in PUBLIC_SEO_PAGES
+    )
+    xml = f'<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>'
+    return Response(xml, mimetype="application/xml")
+
+
+@app.after_request
+def seo_and_cache_headers(resp):
+    if request.path.startswith("/api/"):
+        resp.headers["X-Robots-Tag"] = "noindex, nofollow"  # JSON is never a search result
+    elif request.path.startswith("/assets/"):
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"  # hashed filenames
+    return resp
+
+
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve(path):
     # Exclude API routes from static serving to prevent 405/404 masking
     if path.startswith("api/"):
         return jsonify({"status": "error", "message": "API endpoint not found"}), 404
-        
-    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+
+    if path != "" and os.path.isfile(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
-    return send_from_directory(app.static_folder, "index.html")
+    # Known SPA page -> 200; unknown URL -> React 404 page served with a real 404 status
+    return _render_index(200 if path.strip("/") in SPA_ROUTES else 404)
 
 if __name__ == "__main__":
     worker_manager.start_all(app)

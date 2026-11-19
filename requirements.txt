@@ -32,9 +32,7 @@ python-telegram-bot>=20.0
 matplotlib>=3.8.0
 seaborn>=0.13.0
 
-# Optional Advanced Deep Learning (FinBERT Transformer Pipeline)
-transformers>=4.40.0
-torch>=2.0.0
+# Optional FinBERT (transformers/torch, multi-GB): pip install -r requirements-ml.txt
 
 # Development, Testing, and Quality Assurance
 pytest>=8.0.0

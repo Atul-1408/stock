@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useSeo } from "../utils/seo";
 import { useNavigate, Link } from "react-router-dom";
 import { 
   Activity, 
@@ -16,6 +17,7 @@ import api from "../utils/api";
 import { initGSI, renderGSIButton } from "../utils/gsi";
 
 const LoginPage = () => {
+  useSeo({ title: "Log in", description: "Log in to Sovereign Intelligence to trade with virtual money, track stock sentiment and run your trading bot." });
   const [activeTab, setActiveTab] = useState("password"); // 'password' | 'otp'
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

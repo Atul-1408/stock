@@ -39,3 +39,15 @@ dist-ssr/
 # OS
 .DS_Store
 Thumbs.db
+
+# runtime / generated
+*.db
+*.db-wal
+*.db-shm
+*.bak
+*.log
+src/logs/
+frontend/src/tmpclaude-*
+frontend/dist/
+node_modules/
+.env

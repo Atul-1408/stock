@@ -4,12 +4,16 @@ Creates SQLite tables and provides helper functions to store/query data.
 """
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from config import Config
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_connection() -> sqlite3.Connection:
@@ -309,6 +313,8 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL,
                 code TEXT NOT NULL,
+                salt TEXT NOT NULL DEFAULT '',
+                attempts INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 used INTEGER DEFAULT 0
@@ -533,6 +539,14 @@ def init_db() -> None:
             pass
         try:
             cursor.execute("ALTER TABLE orders ADD COLUMN is_bot INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE otp_codes ADD COLUMN salt TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE otp_codes ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
 
@@ -871,38 +885,75 @@ def get_sentiments_last_30_days(ticker: str) -> List[Dict]:
         return [dict(row) for row in rows]
 
 # --- OTP Helpers ---
+def _otp_digest(code: str, salt: str) -> str:
+    """Hash OTP code with per-row salt using sha256."""
+    import hashlib
+    return hashlib.sha256((str(code) + str(salt)).encode('utf-8')).hexdigest()
+
+
 def save_otp(email: str, code: str, expires_at: str) -> None:
-    """Save an OTP code to the database."""
+    """Save a salted hash of an OTP code to the database."""
+    import secrets
     created_at = datetime.now(timezone.utc).isoformat()
+    salt = secrets.token_hex(16)
+    code_hash = _otp_digest(code, salt)
     with get_connection() as conn:
         cursor = conn.cursor()
         # Invalidate any previous unused OTPs for this email
         cursor.execute("UPDATE otp_codes SET used = 1 WHERE email = ? AND used = 0", (email.lower(),))
         cursor.execute(
-            "INSERT INTO otp_codes (email, code, created_at, expires_at) VALUES (?, ?, ?, ?)",
-            (email.lower(), code, created_at, expires_at)
+            "INSERT INTO otp_codes (email, code, salt, attempts, created_at, expires_at) VALUES (?, ?, ?, 0, ?, ?)",
+            (email.lower(), code_hash, salt, created_at, expires_at)
         )
         conn.commit()
 
+
 def verify_otp(email: str, code: str) -> bool:
-    """Verify an OTP code. Returns True if valid and not expired."""
+    """Verify an OTP code with sha256(code + salt) and hmac.compare_digest.
+    Increments attempts on failure and locks OTP after 5 wrong tries.
+    Deletes expired rows.
+    """
+    import hmac
+    delete_expired_otps()
     now = datetime.now(timezone.utc).isoformat()
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id FROM otp_codes
-            WHERE email = ? AND code = ? AND used = 0 AND expires_at > ?
+            SELECT id, code, salt, attempts FROM otp_codes
+            WHERE email = ? AND used = 0 AND expires_at > ?
             ORDER BY created_at DESC LIMIT 1
             """,
-            (email.lower(), code, now)
+            (email.lower(), now)
         )
         row = cursor.fetchone()
-        if row:
+        if not row:
+            return False
+
+        # Locked after 5 wrong attempts
+        if row['attempts'] >= 5:
+            return False
+
+        salt = row['salt'] or ''
+        expected_hash = _otp_digest(code, salt)
+        if hmac.compare_digest(row['code'], expected_hash):
             cursor.execute("UPDATE otp_codes SET used = 1 WHERE id = ?", (row['id'],))
             conn.commit()
             return True
-        return False
+        else:
+            cursor.execute("UPDATE otp_codes SET attempts = attempts + 1 WHERE id = ?", (row['id'],))
+            conn.commit()
+            return False
+
+
+def delete_expired_otps() -> int:
+    """Delete expired OTP rows."""
+    now = datetime.now(timezone.utc).isoformat()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM otp_codes WHERE expires_at <= ?", (now,))
+        conn.commit()
+        return cursor.rowcount
 
 
 # --- User Management ---
@@ -1288,19 +1339,19 @@ def clear_bot_alerts():
         cursor.execute("DELETE FROM alert_logs WHERE user_id = 0")
         conn.commit()
 
+def shared_trade_visible(trade_id: int, viewer_id: int) -> bool:
+    """A shared trade is visible if it is public or belongs to the viewer."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT user_id, is_public FROM shared_trades WHERE id = ?", (trade_id,)).fetchone()
+    return bool(row) and (row['user_id'] == viewer_id or bool(row['is_public']))
+
+
+def shared_trade_exists(trade_id: int) -> bool:
+    with get_connection() as conn:
+        return conn.execute("SELECT 1 FROM shared_trades WHERE id = ?", (trade_id,)).fetchone() is not None
+
+
 # --- Social Helpers ---
-def create_follow(follower_id, following_id):
-    timestamp = datetime.now(timezone.utc).isoformat()
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO user_follows (follower_id, following_id, followed_at) VALUES (?, ?, ?)",
-                (follower_id, following_id, timestamp)
-            )
-            conn.commit()
-    except sqlite3.IntegrityError:
-        pass
 
 def remove_follow(follower_id, following_id):
     with get_connection() as conn:

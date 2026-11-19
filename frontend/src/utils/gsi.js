@@ -3,7 +3,7 @@
  * Ensures that google.accounts.id.initialize is called only once.
  */
 
-const GOOGLE_CLIENT_ID = '1080262616416-ii4tln966156c7niafikjv6g1ifqnqfi.apps.googleusercontent.com';
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '1080262616416-ii4tln966156c7niafikjv6g1ifqnqfi.apps.googleusercontent.com';
 
 let isInitialized = false;
 

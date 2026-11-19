@@ -3,7 +3,10 @@ import schedule
 import asyncio
 from datetime import datetime, timedelta, time as dt_time
 from colorama import init, Fore, Style, Back
-import winsound
+try:
+    import winsound  # Windows-only; optional sound alert
+except ImportError:  # Linux / macOS / Docker
+    winsound = None
 import config
 import socket
 import sys
@@ -280,7 +283,8 @@ def execute_trade(signal, ticker, current_price, df):
     qty = risk_manager.calculate_position_size(paper_exchange.get_balance(), current_price, stop_loss)
     
     if qty > 0:
-        winsound.Beep(1000, 500)
+        if winsound:
+            winsound.Beep(1000, 500)
         print(f"{Back.GREEN}{Fore.BLACK} TRADE EXECUTED {Style.RESET_ALL}")
         
         full_symbol = f"{company_names.get(ticker, ticker)} ({ticker})"

@@ -49,3 +49,14 @@ def isolated_test_database():
     yield _TEST_DB_PATH
     # Cleanup temporary database directory after all tests finish
     shutil.rmtree(_TEST_TEMP_DIR, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _reset_rate_limits():
+    """Each test module starts with fresh rate-limit counters (signup is limited to 5/hour)."""
+    try:
+        import app as flask_app
+        flask_app.limiter.reset()
+    except Exception:
+        pass
+    yield

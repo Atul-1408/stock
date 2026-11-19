@@ -267,7 +267,7 @@ class TestPhase4Integration(unittest.TestCase):
     # ---------------------------------------------------------
     def test_11_stock_details_supported_symbol(self):
         """GET /api/stocks/AAPL/details returns complete fundamental & market data."""
-        res = self.client.get("/api/stocks/AAPL/details")
+        res = self.client.get("/api/stocks/AAPL/details", headers=self.headers)
         self.assertEqual(res.status_code, 200)
         data = json.loads(res.data)
         self.assertIn("info", data)
@@ -277,7 +277,7 @@ class TestPhase4Integration(unittest.TestCase):
 
     def test_12_stock_details_unsupported_symbol(self):
         """GET /api/stocks/NONEXISTENTSYMBOL999/details returns 404 cleanly."""
-        res = self.client.get("/api/stocks/NONEXISTENTSYMBOL999/details")
+        res = self.client.get("/api/stocks/NONEXISTENTSYMBOL999/details", headers=self.headers)
         self.assertEqual(res.status_code, 404)
         data = json.loads(res.data)
         self.assertEqual(data.get("status"), "error")

@@ -22,7 +22,7 @@ This application provides real-time and historical insights into stock market da
 - [Chart.js](https://www.chartjs.org/) & react-chartjs-2 for data visualization
 - [Framer Motion](https://www.framer.com/motion/) for animations
 
-**Backend:
+**Backend:**
 - Python 3.10+
 - Flask (API serving)
 - SQLite3 (Database management)
@@ -52,7 +52,7 @@ stock/
 
 ### Prerequisites
 - Node.js (v18 or higher)
-- Python 3.10+ (Tested up to Python 3.14)
+- Python 3.11 or 3.12 recommended (3.10+ supported; see `.python-version`)
 - API Keys:
   - [NewsAPI.org](https://newsapi.org/) (`NEWS_API_KEY`)
   - [Finnhub.io](https://finnhub.io/) (`FINNHUB_API_KEY`)
@@ -88,6 +88,8 @@ stock/
    - Install required dependencies:
      ```bash
      pip install -r requirements.txt
+     # optional, large: FinBERT sentiment
+     pip install -r requirements-ml.txt
      ```
    - Configure Environment Variables:
      ```bash
@@ -124,3 +126,22 @@ stock/
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Tests & Quality
+
+```bash
+python -m pytest tests -q        # backend + frontend/backend route contract
+python endpoint_audit.py         # 0 server errors expected on malformed input
+cd frontend && npm run build     # production build
+```
+
+## Safety
+
+Paper trading is the default. Live trading needs both `TRADING_MODE=LIVE` and `ALLOW_LIVE_TRADING=true`.
+Nothing in this project is financial advice.
+
+## Docker
+
+```bash
+docker compose up --build        # app on http://localhost:5000
+```

@@ -1,3 +1,4 @@
+from typing import Optional
 import yfinance as yf
 import logging
 logger = logging.getLogger("stock_sense.trading_engine")

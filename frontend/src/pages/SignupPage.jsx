@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useSeo } from "../utils/seo";
 import { useNavigate, Link } from "react-router-dom";
 import { Activity, Mail, Lock, AlertCircle, ArrowRight, User, Terminal, Loader2 } from "lucide-react";
 import api from "../utils/api";
 import { initGSI, renderGSIButton } from "../utils/gsi";
 
 const SignupPage = () => {
+  useSeo({ title: "Create your account", description: "Create a Sovereign Intelligence account and start paper trading NSE and US stocks with AI sentiment." });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");

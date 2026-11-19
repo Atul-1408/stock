@@ -21,9 +21,12 @@ class TradingBotEngine:
 
     def start(self):
         """Start the bot monitoring system"""
+        existing = getattr(self, '_thread', None)
+        if self.running and existing is not None and existing.is_alive():
+            return  # already running: never start a second trading loop
         self.running = True
-        thread = threading.Thread(target=self._main_loop, daemon=True)
-        thread.start()
+        self._thread = threading.Thread(target=self._main_loop, daemon=True)
+        self._thread.start()
         print("🤖 Trading Bot Engine Started")
 
     def stop(self):

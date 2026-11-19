@@ -33,7 +33,13 @@ const NotificationPanel = ({ isOpen, onClose }) => {
       setNotifications([]);
       toast.success("Signal queue cleared");
     } catch (err) {
-      toast.error("Failed to clear signal queue");
+      if (err.response?.status === 403) {
+        // Alerts are shared; only admins can delete them server-side. Hide locally for this user.
+        setNotifications([]);
+        toast.info("Hidden for this session");
+      } else {
+        toast.error("Failed to clear signal queue");
+      }
     }
   };
 

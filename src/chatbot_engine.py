@@ -1,8 +1,10 @@
 from google import genai
+from google.genai import types as genai_types
 import os
 from datetime import datetime, timezone
 import json
 import re
+from typing import Optional
 from config import Config
 
 class TradingChatbot:
@@ -42,7 +44,7 @@ class TradingChatbot:
         system_prompt = self._build_system_prompt(user_context, market_context)
         
         # Build conversation for Gemini
-        full_content = f"{system_prompt}\n\n"
+        full_content = ""
         
         # Add history (last 5 messages for context)
         if conversation_history:
@@ -61,14 +63,16 @@ class TradingChatbot:
             try:
                 response = self.client.models.generate_content(
                     model=self.model_name,
-                    contents=full_content
+                    contents=full_content,
+                    config=genai_types.GenerateContentConfig(system_instruction=system_prompt),
                 )
             except Exception:
                 fallback_models = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash-lite"]
                 alt_model = next((m for m in fallback_models if m != self.model_name), "gemini-flash-lite-latest")
                 response = self.client.models.generate_content(
                     model=alt_model,
-                    contents=full_content
+                    contents=full_content,
+                    config=genai_types.GenerateContentConfig(system_instruction=system_prompt),
                 )
             
             if not response or not response.text:

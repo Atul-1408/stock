@@ -158,7 +158,7 @@ class TestPhase2Stabilization(unittest.TestCase):
             user_id=self.user_id,
             symbol="RELIANCE.NS",
             side="BUY",
-            quantity=1000.0,  # 1000 * 2500 = 2,500,000 > 100,000 balance
+            quantity=100000.0,  # 100,000 * INR 2,500 = INR 250M (~USD 3M after base-currency conversion) > 100,000 balance
             execution_price=2500.0
         )
         self.assertFalse(result["success"])
