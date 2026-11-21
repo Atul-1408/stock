@@ -198,6 +198,32 @@ class AuditRegressionTests(unittest.TestCase):
         # Demote back
         database.set_user_role(self.u2, "user")
 
+    def test_social_privacy_hides_private_user_trades(self):
+        # Set user 1 as private
+        with database.get_connection() as conn:
+            conn.execute("UPDATE users SET is_public = 0 WHERE id = ?", (self.u1,))
+            conn.commit()
+
+        # Create shared trade for user 1
+        trade_id = database.create_shared_trade(self.u1, "AAPL", "BUY", 100.0, 150.0, 0.5, "Private trade note")
+
+        # Feed must NOT contain this trade
+        feed = database.get_shared_trades_feed()
+        feed_ids = [t['id'] for t in feed]
+        self.assertNotIn(trade_id, feed_ids)
+
+        # User 2 attempting to like or comment on private user's trade must receive 404
+        like_res = self.c.post(f"/api/social/like/{trade_id}", headers=self.h2)
+        self.assertEqual(like_res.status_code, 404)
+
+        comment_res = self.c.post(f"/api/social/comment/{trade_id}", headers=self.h2, json={"comment": "Nice trade"})
+        self.assertEqual(comment_res.status_code, 404)
+
+        # Reset user 1 to public
+        with database.get_connection() as conn:
+            conn.execute("UPDATE users SET is_public = 1 WHERE id = ?", (self.u1,))
+            conn.commit()
+
 
 if __name__ == "__main__":
     unittest.main()
