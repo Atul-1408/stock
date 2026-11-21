@@ -188,19 +188,19 @@ def init_db() -> None:
         # Migration: Add columns to users if they don't exist
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN bio TEXT")
-        except: pass
+        except sqlite3.OperationalError: pass
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
-        except: pass
+        except sqlite3.OperationalError: pass
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN is_public INTEGER DEFAULT 1")
-        except: pass
+        except sqlite3.OperationalError: pass
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN twitter_handle TEXT")
-        except: pass
+        except sqlite3.OperationalError: pass
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'")
-        except: pass
+        except sqlite3.OperationalError: pass
 
         # Token blocklist table for JWT revocation
         cursor.execute(

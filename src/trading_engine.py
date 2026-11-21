@@ -1,16 +1,8 @@
 from typing import Optional
 import yfinance as yf
 import logging
+from database import get_user_portfolio, get_user_balance
 logger = logging.getLogger("stock_sense.trading_engine")
-from database import (
-    get_user_balance,
-    update_user_balance,
-    get_user_shares,
-    get_user_portfolio,
-    update_portfolio_item,
-    delete_portfolio_item,
-    add_transaction
-)
 
 def get_current_price(ticker: str) -> Optional[float]:
     """Get latest price using market data cache or live yfinance fallback.

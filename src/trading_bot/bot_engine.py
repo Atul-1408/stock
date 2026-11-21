@@ -1,5 +1,6 @@
 import threading
 import time
+import logging
 from datetime import datetime, time as dt_time
 import sqlite3
 import yfinance as yf
@@ -12,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import database
 from config import Config
+
+logger = logging.getLogger("stock_sense.trading_bot.bot_engine")
 
 class TradingBotEngine:
     def __init__(self, db_path=str(Config.DB_PATH)):
@@ -27,12 +30,12 @@ class TradingBotEngine:
         self.running = True
         self._thread = threading.Thread(target=self._main_loop, daemon=True)
         self._thread.start()
-        print("🤖 Trading Bot Engine Started")
+        logger.info("Trading Bot Engine Started")
 
     def stop(self):
         """Stop the bot system"""
         self.running = False
-        print("🛑 Trading Bot Engine Stopped")
+        logger.info("Trading Bot Engine Stopped")
 
     def _main_loop(self):
         """Main bot monitoring loop - runs every 5 minutes"""
@@ -53,13 +56,13 @@ class TradingBotEngine:
                 time.sleep(300)
 
             except Exception as e:
-                print(f"❌ Bot Engine Error: {e}")
+                logger.error(f"Bot Engine Error: {e}")
                 time.sleep(60)
 
     def _run_bot_cycle(self, user_id):
         """Run one complete bot cycle for a user"""
 
-        print(f"🔄 Running bot cycle for user {user_id}")
+        logger.info(f"Running bot cycle for user {user_id}")
 
         # Get bot configuration
         config = self._get_bot_config(user_id)
@@ -71,7 +74,7 @@ class TradingBotEngine:
         watchlist = self._get_watchlist(user_id)
 
         if not watchlist:
-            print(f"⚠️ User {user_id} has empty watchlist")
+            logger.warning(f"User {user_id} has empty watchlist")
             return
 
         # Check each stock
@@ -88,7 +91,7 @@ class TradingBotEngine:
                 self._check_open_positions(user_id, ticker, config)
 
             except Exception as e:
-                print(f"❌ Error processing {ticker} for user {user_id}: {e}")
+                logger.error(f"Error processing {ticker} for user {user_id}: {e}")
 
     def _generate_signal(self, user_id, ticker, config) -> Optional[Dict]:
         """
@@ -98,7 +101,7 @@ class TradingBotEngine:
         3. ML model prediction
         """
 
-        print(f"📊 Analyzing {ticker}...")
+        logger.debug(f"Analyzing {ticker}...")
 
         # 1. Get sentiment score
         sentiment_score = 0
@@ -107,7 +110,7 @@ class TradingBotEngine:
 
             # Skip if sentiment below threshold
             if sentiment_score < config['min_sentiment_score']:
-                print(f"❌ {ticker}: Sentiment too low ({sentiment_score:.2f})")
+                logger.debug(f"{ticker}: Sentiment too low ({sentiment_score:.2f})")
                 return None
 
         # 2. Get technical analysis
@@ -138,7 +141,7 @@ class TradingBotEngine:
             ml_score * weights['ml']
         )
 
-        print(f"📈 {ticker} scores - Sentiment: {sentiment_score:.2f}, Technical: {technical_score:.2f}, ML: {ml_score:.2f}, Combined: {combined_score:.2f}")
+        logger.info(f"{ticker} scores - Sentiment: {sentiment_score:.2f}, Technical: {technical_score:.2f}, ML: {ml_score:.2f}, Combined: {combined_score:.2f}")
 
         # 5. Generate signal based on combined score
         if combined_score >= 0.7:  # Strong BUY signal
@@ -180,7 +183,7 @@ class TradingBotEngine:
             return 0
 
         except Exception as e:
-            print(f"Error getting sentiment for {ticker}: {e}")
+            logger.error(f"Error getting sentiment for {ticker}: {e}")
             return 0
 
     def _calculate_technical_score(self, ticker: str) -> float:
@@ -212,7 +215,7 @@ class TradingBotEngine:
             return technical_score
 
         except Exception as e:
-            print(f"Error calculating technical score: {e}")
+            logger.error(f"Error calculating technical score: {e}")
             return 0
 
     def _calculate_rsi(self, prices, period=14) -> float:
@@ -226,7 +229,7 @@ class TradingBotEngine:
             rsi = 100 - (100 / (1 + rs))
 
             return rsi.iloc[-1] if not rsi.empty else 50
-        except:
+        except Exception:
             return 50
 
     def _normalize_rsi(self, rsi: float) -> float:
@@ -257,7 +260,7 @@ class TradingBotEngine:
                 return -1.0  # Bearish
             else:
                 return 0.0  # Neutral
-        except:
+        except Exception:
             return 0
 
     def _calculate_volume_score(self, data) -> float:
@@ -273,7 +276,7 @@ class TradingBotEngine:
                 return 0.5
             else:
                 return 0
-        except:
+        except Exception:
             return 0
 
     def _calculate_macd_score(self, data) -> float:
@@ -296,7 +299,7 @@ class TradingBotEngine:
                 return -0.5
             else:
                 return 0
-        except:
+        except Exception:
             return 0
 
     def _get_ml_prediction(self, ticker: str, sentiment_score: float, technical_score: float) -> float:
@@ -355,11 +358,11 @@ class TradingBotEngine:
     def _execute_bot_trade(self, user_id: int, signal: Dict, config: Dict) -> None:
         """Execute bot trade through the unified atomic ledger."""
 
-        print(f"[BOT] Executing {signal['action']} for {signal['ticker']}")
+        logger.info(f"[BOT] Executing {signal['action']} for {signal['ticker']}")
 
         # Check if max trades per day reached
         if self._has_reached_daily_limit(user_id, config['max_trades_per_day']):
-            print(f"[BOT] Daily trade limit reached for user {user_id}")
+            logger.info(f"[BOT] Daily trade limit reached for user {user_id}")
             return
 
         qty = float(signal.get('shares', 1))
@@ -383,7 +386,7 @@ class TradingBotEngine:
         )
 
         if not trade_res.get('success'):
-            print(f"[BOT] Trade rejected by ledger for user {user_id}: {trade_res.get('message')}")
+            logger.warning(f"[BOT] Trade rejected by ledger for user {user_id}: {trade_res.get('message')}")
             return
 
         conn = sqlite3.connect(self.db_path)
@@ -420,7 +423,7 @@ class TradingBotEngine:
         conn.commit()
         conn.close()
 
-        print(f"[BOT] Trade executed successfully: {action} {signal['ticker']} (Order #{trade_res.get('order_id')})")
+        logger.info(f"[BOT] Trade executed successfully: {action} {signal['ticker']} (Order #{trade_res.get('order_id')})")
 
     def _check_open_positions(self, user_id: int, ticker: str, config: Dict) -> None:
         """Check open positions for stop loss / take profit"""
@@ -457,7 +460,7 @@ class TradingBotEngine:
     def _close_bot_position(self, user_id: int, position, exit_price: float, exit_reason: str, conn: sqlite3.Connection) -> None:
         """Close an open bot position through the unified atomic ledger."""
 
-        print(f"[BOT] Closing position: {position['ticker']} at {exit_price} ({exit_reason})")
+        logger.info(f"[BOT] Closing position: {position['ticker']} at {exit_price} ({exit_reason})")
 
         close_side = 'SELL' if position['action'] == 'BUY' else 'BUY'
         trade_res = database.execute_trade_atomic(
@@ -472,7 +475,7 @@ class TradingBotEngine:
         )
 
         if not trade_res.get('success'):
-            print(f"[BOT] Position close rejected by ledger: {trade_res.get('message')}")
+            logger.warning(f"[BOT] Position close rejected by ledger: {trade_res.get('message')}")
             if "Insufficient shares" in trade_res.get('message', ''):
                 exit_reason = 'MANUAL_OR_EXTERNAL_CLOSE'
             else:
@@ -501,7 +504,7 @@ class TradingBotEngine:
 
         conn.commit()
 
-        print(f"[BOT] Position closed: {exit_reason} | P&L: ${pnl:.2f} ({pnl_pct:.2f}%)")
+        logger.info(f"[BOT] Position closed: {exit_reason} | P&L: ${pnl:.2f} ({pnl_pct:.2f}%)")
 
     def _get_current_price(self, ticker: str) -> Optional[float]:
         """Get current stock price"""
@@ -512,7 +515,8 @@ class TradingBotEngine:
             if not data.empty:
                 return float(data['Close'].iloc[-1])
             return None
-        except:
+        except Exception as e:
+            logger.debug(f"Error fetching current price for {ticker}: {e}")
             return None
 
     def _calculate_position_size(self, price: float, max_position: float, risk_level: str) -> int:
