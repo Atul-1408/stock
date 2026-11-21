@@ -1289,7 +1289,8 @@ def chat_analyze_stock_api(ticker):
 @limiter.limit("60 per minute")
 def get_leaderboard_api():
     period = request.args.get('period', 'all_time')
-    board = leaderboard_engine.get_global_leaderboard(period)
+    limit = max(1, min(request.args.get('limit', 100, type=int) or 100, 100))
+    board = leaderboard_engine.get_global_leaderboard(period, limit=limit)
     return jsonify({'leaderboard': board}), 200
 
 

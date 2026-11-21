@@ -1404,10 +1404,22 @@ def clear_bot_alerts():
         conn.commit()
 
 def shared_trade_visible(trade_id: int, viewer_id: int) -> bool:
-    """A shared trade is visible if it is public or belongs to the viewer."""
+    # DECISION: A shared trade is visible only if author's profile is public (u.is_public = 1) or viewer is author.
     with get_connection() as conn:
-        row = conn.execute("SELECT user_id, is_public FROM shared_trades WHERE id = ?", (trade_id,)).fetchone()
-    return bool(row) and (row['user_id'] == viewer_id or bool(row['is_public']))
+        row = conn.execute(
+            """
+            SELECT s.user_id, s.is_public, u.is_public AS user_is_public
+            FROM shared_trades s
+            JOIN users u ON s.user_id = u.id
+            WHERE s.id = ?
+            """,
+            (trade_id,)
+        ).fetchone()
+    if not row:
+        return False
+    if row['user_id'] == viewer_id:
+        return True
+    return bool(row['is_public']) and bool(row['user_is_public'])
 
 
 def shared_trade_exists(trade_id: int) -> bool:
@@ -1450,6 +1462,7 @@ def create_shared_trade(user_id, ticker, action, entry, target, sentiment, reaso
         return cursor.lastrowid
 
 def get_shared_trades_feed(limit=50):
+    # DECISION: Hide trades of private users (u.is_public = 0) from the social feed
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -1457,7 +1470,7 @@ def get_shared_trades_feed(limit=50):
             SELECT s.*, u.username, u.avatar_url 
             FROM shared_trades s
             JOIN users u ON s.user_id = u.id
-            WHERE s.is_public = 1
+            WHERE s.is_public = 1 AND u.is_public = 1
             ORDER BY s.created_at DESC LIMIT ?
             """,
             (limit,)
@@ -1659,16 +1672,23 @@ def bulk_insert_stocks(stocks_data: List[Dict]) -> int:
     return inserted
 
 
+def _escape_like(text: str) -> str:
+    """Escape special characters for SQL LIKE clause."""
+    return text.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
 def search_stock_universe(query: str, exchange: str = 'all', sector: str = 'all', limit: int = 50) -> List[Dict]:
     """Search stocks by symbol or company name with optional filters."""
+    limit = max(1, min(int(limit), 100))
     with get_connection() as conn:
         cursor = conn.cursor()
         sql = "SELECT * FROM stock_universe WHERE is_active = 1"
         params = []
 
         if query:
-            sql += " AND (symbol LIKE ? OR company_name LIKE ?)"
-            q = f"%{query}%"
+            escaped = _escape_like(str(query))
+            sql += " AND (symbol LIKE ? ESCAPE '\\' OR company_name LIKE ? ESCAPE '\\')"
+            q = f"%{escaped}%"
             params.extend([q, q])
 
         if exchange and exchange != 'all':
