@@ -727,10 +727,7 @@ def update_bot_config():
 def activate_bot_api():
     """Activate bot"""
     user_id = int(get_jwt_identity())
-    
     database.set_bot_active(user_id, True)
-    bot_engine.start()
-    
     return jsonify({'success': True, 'message': 'Bot activated'}), 200
 
 @app.route('/api/bot/stop', methods=['POST'])
