@@ -6,6 +6,7 @@ import "react-toastify/dist/ReactToastify.css";
 import api from "./utils/api";
 import ProtectedRoute from "./components/ProtectedRoute";
 import TerminalLayout from "./components/layout/TerminalLayout";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 import Dashboard from "./pages/Dashboard";
 import AnalyticsDashboard from "./pages/AnalyticsDashboard";
@@ -74,7 +75,9 @@ function App() {
         isDark={isDark}
         toggleTheme={toggleTheme}
       >
-        <Component />
+        <ErrorBoundary>
+          <Component />
+        </ErrorBoundary>
       </TerminalLayout>
     </ProtectedRoute>
   );
