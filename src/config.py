@@ -34,7 +34,7 @@ class Config:
         import secrets
         JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_hex(32))
 
-    JWT_ACCESS_TOKEN_EXPIRES_DAYS = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES_DAYS", "7"))
+    # Access tokens live 15 minutes and refresh tokens 7 days (set in app.py).
 
     # Public base URL used for canonical links, sitemap and social tags (no trailing slash)
     SITE_URL = os.getenv("SITE_URL", "").rstrip("/")

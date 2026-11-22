@@ -11,13 +11,15 @@ class TradingChatbot:
     def __init__(self):
         # Initialize Gemini API (FREE)
         api_key = Config.GEMINI_API_KEY
-            
+        # Always defined, even when no API key is configured (degraded offline mode)
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
+        self.client = None
+
         # Use the newer google-genai Client pattern
         try:
             if not api_key:
                 raise ValueError("GEMINI_API_KEY environment variable is not set.")
             self.client = genai.Client(api_key=api_key)
-            self.model_name = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
         except Exception as e:
             print(f"Gemini Init Error: {e}")
             self.client = None

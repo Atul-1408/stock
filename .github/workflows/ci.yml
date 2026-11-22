@@ -7,6 +7,7 @@ jobs:
       matrix: { python: ["3.11", "3.12"] }
     steps:
       - uses: actions/checkout@v4
+        with: { lfs: true }   # needed once models/*.pkl are real LFS objects
       - uses: actions/setup-python@v5
         with: { python-version: "${{ matrix.python }}", cache: pip }
       - run: pip install -r requirements.txt pyflakes

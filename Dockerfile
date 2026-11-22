@@ -15,7 +15,10 @@ RUN pip install --no-cache-dir -r requirements.txt gunicorn
 COPY src/ ./src/
 COPY models/ ./models/
 COPY --from=web /web/dist ./frontend/dist
-RUN mkdir -p /app/data
+RUN useradd --create-home --uid 10001 appuser && mkdir -p /app/data && chown -R appuser:appuser /app
+USER appuser
 EXPOSE 5000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health/live', timeout=3)"
 # One worker: SQLite is single-writer and the rate limiter is in-memory until Redis is added.
 CMD ["gunicorn", "--chdir", "src", "-w", "1", "--threads", "8", "-b", "0.0.0.0:5000", "app:app"]
