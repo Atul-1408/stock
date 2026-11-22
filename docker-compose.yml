@@ -5,6 +5,7 @@ services:
     env_file: .env          # JWT_SECRET_KEY must be a real 32+ char secret in production
     environment:
       DATABASE_PATH: /app/data/stock_dashboard.db
+      # Set RATELIMIT_STORAGE_URI (e.g. redis://redis:6379/0) before scaling gunicorn workers > 1
     volumes:
       - stock-data:/app/data
     restart: unless-stopped
