@@ -112,11 +112,9 @@ def execute_trade(user_id: int, ticker: str, action: str, shares: float, sentime
 def get_portfolio_summary(user_id: int):
     """Fetch user portfolio with live P&L calculation and strict price availability handling."""
     from database import (
-        get_user_portfolio,
         get_user_buying_power,
         get_user_reserved_cash,
         get_user_reserved_shares,
-        get_user_balance,
         get_closed_trades,
     )
 

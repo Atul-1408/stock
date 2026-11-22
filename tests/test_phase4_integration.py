@@ -52,17 +52,15 @@ from app import app
 from config import Config
 import chatbot_engine
 
-# Mock Chatbot AI client to ensure offline deterministic responses
-chatbot_engine.TradingChatbot.get_response = MagicMock(return_value={
-    "response": "Market sentiment for AAPL is currently balanced with neutral momentum.",
-    "actions": [{"type": "hold", "confidence": "medium"}],
-    "stocks_mentioned": ["AAPL"]
-})
-
-
 class TestPhase4Integration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls._orig_get_response = chatbot_engine.TradingChatbot.get_response
+        chatbot_engine.TradingChatbot.get_response = MagicMock(return_value={
+            "response": "Market sentiment for AAPL is currently balanced with neutral momentum.",
+            "actions": [{"type": "hold", "confidence": "medium"}],
+            "stocks_mentioned": ["AAPL"]
+        })
         app.config["TESTING"] = True
         cls.client = app.test_client()
 
@@ -105,6 +103,11 @@ class TestPhase4Integration(unittest.TestCase):
                 "currency": "USD"
             }
         ])
+
+    @classmethod
+    def tearDownClass(cls):
+        if hasattr(cls, "_orig_get_response"):
+            chatbot_engine.TradingChatbot.get_response = cls._orig_get_response
 
     # ---------------------------------------------------------
     # 1. AUTHENTICATION & SESSION LIFECYCLE

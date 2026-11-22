@@ -7,7 +7,6 @@ try:
     import winsound  # Windows-only; optional sound alert
 except ImportError:  # Linux / macOS / Docker
     winsound = None
-import config
 import socket
 import sys
 from pathlib import Path
@@ -52,15 +51,13 @@ src_path = str(Path(__file__).resolve().parent.parent)
 if src_path not in sys.path:
     sys.path.append(src_path)
 
-from trading_bot import market_analyzer
-from trading_bot import pattern_recognition
-from trading_bot import decision_engine
 from trading_bot.risk_manager import RiskManager
 from trading_bot.sentiment_analyzer import SentimentEngine
 from trading_bot.event_manager import EventManager
 from trading_bot.notifier import TelegramNotifier
 from trading_bot.paper_exchange import PaperExchange
 from trading_bot import config
+from trading_bot import market_analyzer
 
 init()
 

@@ -2,7 +2,6 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from telegram import Bot
 from dotenv import load_dotenv
 
 # Ensure we can import database from the src directory
