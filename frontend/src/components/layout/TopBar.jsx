@@ -116,7 +116,8 @@ export default function TopBar({
       <div className="flex items-center gap-3">
         <button
           onClick={onMobileMenuToggle}
-          className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
+          aria-label="Open mobile navigation menu"
+          className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:outline-none transition-colors"
           title="Open Menu"
         >
           <Menu size={18} />
@@ -197,7 +198,8 @@ export default function TopBar({
         {/* Notification Bell */}
         <button
           onClick={onOpenNotifications}
-          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors relative"
+          aria-label="Alerts and notifications"
+          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:outline-none transition-colors relative"
           title="Alerts & Notifications"
         >
           <Bell size={16} />
@@ -209,7 +211,8 @@ export default function TopBar({
         {/* Help / About Modal Trigger */}
         <button
           onClick={onOpenAbout}
-          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
+          aria-label="Terminal architecture and about system"
+          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:outline-none transition-colors"
           title="Terminal Architecture & About"
         >
           <HelpCircle size={16} />
@@ -219,7 +222,8 @@ export default function TopBar({
         <div className="relative" ref={userMenuRef}>
           <button
             onClick={() => setUserMenuOpen(!userMenuOpen)}
-            className="flex items-center gap-1.5 p-1 pl-1.5 pr-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition-colors"
+            aria-label="User account menu"
+            className="flex items-center gap-1.5 p-1 pl-1.5 pr-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:outline-none transition-colors"
           >
             <div className="w-6 h-6 rounded-md bg-cyan-500/20 text-cyan-400 font-mono text-xs font-bold flex items-center justify-center">
               {initials}

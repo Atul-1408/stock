@@ -5,7 +5,8 @@ function DarkModeToggle({ isDark, toggle }) {
     return (
         <button
             onClick={toggle}
-            className="relative flex items-center justify-center p-2 rounded-full bg-slate-100 dark:bg-slate-800/50 hover:bg-slate-200 dark:hover:bg-slate-700/50 border border-slate-200 dark:border-slate-700/50 transition-all shadow-sm"
+            aria-label={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
+            className="relative flex items-center justify-center p-2 rounded-full bg-slate-100 dark:bg-slate-800/50 hover:bg-slate-200 dark:hover:bg-slate-700/50 border border-slate-200 dark:border-slate-700/50 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:outline-none transition-all shadow-sm"
             title={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
         >
             <motion.div

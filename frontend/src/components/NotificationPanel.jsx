@@ -84,7 +84,8 @@ const NotificationPanel = ({ isOpen, onClose }) => {
                 {notifications.length > 0 && (
                   <button
                     onClick={clearAll}
-                    className="p-1.5 text-slate-400 hover:text-terminal-coral hover:bg-terminal-coral/10 rounded transition-colors"
+                    aria-label="Purge notifications"
+                    className="p-1.5 text-slate-400 hover:text-terminal-coral hover:bg-terminal-coral/10 focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:outline-none rounded transition-colors"
                     title="Purge notifications"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -92,7 +93,8 @@ const NotificationPanel = ({ isOpen, onClose }) => {
                 )}
                 <button
                   onClick={onClose}
-                  className="p-1.5 rounded hover:bg-terminal-800 text-slate-400 hover:text-slate-200 transition-colors"
+                  aria-label="Close notifications panel"
+                  className="p-1.5 rounded hover:bg-terminal-800 text-slate-400 hover:text-slate-200 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:outline-none transition-colors"
                 >
                   <X className="w-4 h-4" />
                 </button>

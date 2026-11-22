@@ -101,7 +101,7 @@ export default function OrdersPositions() {
             <div className="text-[11px] font-bold">
               <span className="text-slate-500 mr-1.5">NET P&L:</span>
               <span className={totalPnl >= 0 ? "text-emerald-400" : "text-coral-400"}>
-                {totalPnl >= 0 ? "+" : ""}${Number(totalPnl).toFixed(2)}
+                {totalPnl >= 0 ? "▲ +" : "▼ "}${Math.abs(Number(totalPnl)).toFixed(2)}
               </span>
             </div>
           )}
@@ -109,7 +109,8 @@ export default function OrdersPositions() {
           <button
             onClick={() => (activeTab === "orders" ? fetchOrders() : fetchPositions())}
             disabled={loading}
-            className="p-1.5 text-slate-400 hover:text-white rounded hover:bg-white/5 transition-colors"
+            aria-label="Refresh orders and positions ledger"
+            className="p-1.5 text-slate-400 hover:text-white rounded hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:outline-none transition-colors"
             title="Refresh Ledger"
           >
             <RefreshCw size={13} className={loading ? "animate-spin text-cyan-400" : ""} />
@@ -229,10 +230,10 @@ export default function OrdersPositions() {
                         {p.current_value != null ? `$${Number(p.current_value).toFixed(2)}` : "—"}
                       </td>
                       <td className={`py-2.5 px-3 text-right font-bold ${p.pnl != null ? (pnlUp ? "text-emerald-400" : "text-coral-400") : "text-slate-400"}`}>
-                        {p.pnl != null ? `${pnlUp ? "+" : ""}$${Number(p.pnl).toFixed(2)}` : "—"}
+                        {p.pnl != null ? `${pnlUp ? "▲ +" : "▼ "}$${Math.abs(Number(p.pnl)).toFixed(2)}` : "—"}
                       </td>
                       <td className={`py-2.5 px-3 text-right font-bold ${p.pnl_pct != null ? (pnlUp ? "text-emerald-400" : "text-coral-400") : "text-slate-400"}`}>
-                        {p.pnl_pct != null ? `${pnlUp ? "+" : ""}${Number(p.pnl_pct).toFixed(2)}%` : "—"}
+                        {p.pnl_pct != null ? `${pnlUp ? "▲ +" : "▼ "}${Math.abs(Number(p.pnl_pct)).toFixed(2)}%` : "—"}
                       </td>
                     </tr>
                   );

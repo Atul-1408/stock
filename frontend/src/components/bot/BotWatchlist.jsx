@@ -141,8 +141,9 @@ function BotWatchlist({ onUpdate }) {
 
               <button
                 onClick={() => handleRemoveTicker(item.ticker)}
+                aria-label={`Remove ${item.ticker} from watchlist`}
                 title="Remove symbol"
-                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-terminal-coral/20 text-slate-500 hover:text-terminal-coral transition-all"
+                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-terminal-coral/20 text-slate-500 hover:text-terminal-coral focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:outline-none transition-all"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>

@@ -91,7 +91,8 @@ export default function Sidebar({ isCollapsed, setIsCollapsed, isMobileOpen, set
           {/* Desktop Collapse Toggle */}
           <button
             onClick={() => setIsCollapsed(!isCollapsed)}
-            className="hidden lg:flex p-1 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
+            aria-label={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+            className="hidden lg:flex p-1 rounded-md text-slate-400 hover:text-white hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:outline-none transition-colors"
             title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
           >
             {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}

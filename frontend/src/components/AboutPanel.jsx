@@ -60,7 +60,8 @@ const AboutPanel = ({ isOpen, onClose }) => {
               </div>
               <button
                 onClick={onClose}
-                className="p-1.5 rounded hover:bg-terminal-800 text-slate-400 hover:text-slate-200 transition-colors"
+                aria-label="Close desk documentation"
+                className="p-1.5 rounded hover:bg-terminal-800 text-slate-400 hover:text-slate-200 focus-visible:ring-2 focus-visible:ring-cyan-500 focus-visible:outline-none transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
