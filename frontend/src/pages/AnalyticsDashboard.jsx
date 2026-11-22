@@ -71,7 +71,7 @@ function MetricTile({ title, value, subText, delta, isPositive, badge }) {
 }
 
 export default function AnalyticsDashboard() {
-  const { currency } = useCurrency();
+  const { currency, formatPrice } = useCurrency();
   const [analytics, setAnalytics] = useState(null);
   const [history, setHistory] = useState(null);
   const [sectors, setSectors] = useState(null);
@@ -164,17 +164,17 @@ export default function AnalyticsDashboard() {
           title="PORTFOLIO EQUITY"
           value={
             analytics?.portfolio_equity != null
-              ? formatCurrency(analytics.portfolio_equity, currency)
-              : formatCurrency(
+              ? formatPrice(analytics.portfolio_equity, 'USD')
+              : formatPrice(
                   (analytics?.cash_balance || 0) + (analytics?.known_market_value || 0),
-                  currency
+                  'USD'
                 )
           }
           subText={`Holdings: ${
             analytics?.total_value != null
-              ? formatCurrency(analytics.total_value, currency)
+              ? formatPrice(analytics.total_value, 'USD')
               : analytics?.known_market_value != null
-              ? `${formatCurrency(analytics.known_market_value, currency)} (Partial)`
+              ? `${formatPrice(analytics.known_market_value, 'USD')} (Partial)`
               : "Unavailable"
           }`}
           badge="NET ASSETS"
@@ -182,10 +182,10 @@ export default function AnalyticsDashboard() {
 
         <MetricTile
           title="CASH & BUYING POWER"
-          value={formatCurrency(analytics?.buying_power || 0, currency)}
-          subText={`Cash: ${formatCurrency(analytics?.cash_balance || 0, currency)} | Rsv: ${formatCurrency(
+          value={formatPrice(analytics?.buying_power || 0, 'USD')}
+          subText={`Cash: ${formatPrice(analytics?.cash_balance || 0, 'USD')} | Rsv: ${formatPrice(
             analytics?.reserved_cash || 0,
-            currency
+            'USD'
           )}`}
           badge="LIQUIDITY"
         />
@@ -194,9 +194,9 @@ export default function AnalyticsDashboard() {
           title="UNREALIZED P&L"
           value={
             analytics?.unrealized_pnl != null
-              ? `${analytics.unrealized_pnl >= 0 ? "+" : ""}${formatCurrency(
+              ? `${analytics.unrealized_pnl >= 0 ? "+" : ""}${formatPrice(
                   analytics.unrealized_pnl,
-                  currency
+                  'USD'
                 )}`
               : "Unavailable"
           }
@@ -206,15 +206,15 @@ export default function AnalyticsDashboard() {
               : null
           }
           isPositive={(analytics?.unrealized_pnl || 0) >= 0}
-          subText={`Active Cost: ${formatCurrency(analytics?.total_invested || 0, currency)}`}
+          subText={`Active Cost: ${formatPrice(analytics?.total_invested || 0, 'USD')}`}
           badge="OPEN"
         />
 
         <MetricTile
           title="REALIZED P&L"
-          value={`${(analytics?.realized_pnl || 0) >= 0 ? "+" : ""}${formatCurrency(
+          value={`${(analytics?.realized_pnl || 0) >= 0 ? "+" : ""}${formatPrice(
             analytics?.realized_pnl || 0,
-            currency
+            'USD'
           )}`}
           delta={
             analytics?.realized_return_pct != null
@@ -222,9 +222,9 @@ export default function AnalyticsDashboard() {
               : null
           }
           isPositive={(analytics?.realized_pnl || 0) >= 0}
-          subText={`Closed Cost: ${formatCurrency(
+          subText={`Closed Cost: ${formatPrice(
             analytics?.closed_cost_basis || 0,
-            currency
+            'USD'
           )}`}
           badge="CLOSED"
         />
@@ -236,9 +236,9 @@ export default function AnalyticsDashboard() {
           title="TOTAL COMBINED P&L"
           value={
             analytics?.total_pnl != null
-              ? `${analytics.total_pnl >= 0 ? "+" : ""}${formatCurrency(
+              ? `${analytics.total_pnl >= 0 ? "+" : ""}${formatPrice(
                   analytics.total_pnl,
-                  currency
+                  'USD'
                 )}`
               : "Unavailable"
           }
@@ -248,7 +248,7 @@ export default function AnalyticsDashboard() {
               : null
           }
           isPositive={(analytics?.total_pnl || 0) >= 0}
-          subText={`Deposit: ${formatCurrency(analytics?.starting_balance || 0, currency)}`}
+          subText={`Deposit: ${formatPrice(analytics?.starting_balance || 0, 'USD')}`}
           badge="COMBINED"
         />
 
@@ -268,9 +268,9 @@ export default function AnalyticsDashboard() {
 
         <MetricTile
           title="BOT PERFORMANCE"
-          value={`${(analytics?.bot_performance?.total_pnl || 0) >= 0 ? "+" : ""}${formatCurrency(
+          value={`${(analytics?.bot_performance?.total_pnl || 0) >= 0 ? "+" : ""}${formatPrice(
             analytics?.bot_performance?.total_pnl || 0,
-            currency
+            'USD'
           )}`}
           subText={`${analytics?.bot_performance?.total_trades || 0} Trades | Win: ${
             analytics?.bot_performance?.win_rate != null
@@ -283,9 +283,9 @@ export default function AnalyticsDashboard() {
 
         <MetricTile
           title="MANUAL PERFORMANCE"
-          value={`${(analytics?.manual_performance?.total_pnl || 0) >= 0 ? "+" : ""}${formatCurrency(
+          value={`${(analytics?.manual_performance?.total_pnl || 0) >= 0 ? "+" : ""}${formatPrice(
             analytics?.manual_performance?.total_pnl || 0,
-            currency
+            'USD'
           )}`}
           subText={`${analytics?.manual_performance?.total_trades || 0} Trades | Win: ${
             analytics?.manual_performance?.win_rate != null
@@ -487,7 +487,7 @@ export default function AnalyticsDashboard() {
                             isUp ? "text-emerald-400" : "text-coral-400"
                           }`}
                         >
-                          {isUp ? "+" : ""}${Number(item.pnl || 0).toFixed(2)}
+                          {isUp ? "+" : ""}{formatPrice(Math.abs(item.pnl || 0), 'USD')}
                         </span>
                         <span
                           className={`font-bold ${

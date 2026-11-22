@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { ShoppingCart, DollarSign, AlertCircle, CheckCircle2 } from "lucide-react";
 import api from "../utils/api";
-import { useCurrency } from "../contexts/CurrencyContext";
+import { useCurrency, getNativeCurrency } from "../contexts/CurrencyContext";
 import { formatCurrency } from "../utils/currency";
 
 export default function TradingPanel({
@@ -12,7 +12,7 @@ export default function TradingPanel({
   onTradeSuccess,
   balance,
 }) {
-  const { currency } = useCurrency();
+  const { currency, formatPrice } = useCurrency();
   const [shares, setShares] = useState(1);
   const [action, setAction] = useState("BUY");
   const [loading, setLoading] = useState(false);
@@ -70,7 +70,7 @@ export default function TradingPanel({
           </span>
         </div>
         <span className="text-[10px] text-slate-400 font-semibold">
-          LTP: ${unitPrice.toFixed(2)}
+          LTP: {formatPrice(unitPrice, getNativeCurrency(ticker))}
         </span>
       </div>
 
@@ -133,11 +133,11 @@ export default function TradingPanel({
       <div className="p-2.5 rounded bg-black/40 border border-white/5 text-xs space-y-1">
         <div className="flex justify-between text-[11px] text-slate-400">
           <span>ESTIMATED VALUE</span>
-          <span className="text-white font-bold">${totalCost}</span>
+          <span className="text-white font-bold">{formatPrice(numShares * unitPrice, getNativeCurrency(ticker))}</span>
         </div>
         <div className="flex justify-between text-[11px] text-slate-400">
           <span>PAPER CASH</span>
-          <span className="text-emerald-400 font-bold">${Number(balance || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
+          <span className="text-emerald-400 font-bold">{formatPrice(balance || 0, 'USD')}</span>
         </div>
       </div>
 

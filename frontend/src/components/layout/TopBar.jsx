@@ -39,7 +39,7 @@ export default function TopBar({
 }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { currency } = useCurrency();
+  const { currency, formatPrice } = useCurrency();
 
   const [user, setUser] = useState(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -190,7 +190,7 @@ export default function TopBar({
             <Wallet size={13} className="text-emerald-400" />
             <span className="text-slate-400 text-[10px] uppercase">CASH:</span>
             <span className="font-bold text-emerald-400">
-              ${Number(user.current_balance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {formatPrice(user.current_balance, 'USD')}
             </span>
           </div>
         )}
@@ -238,7 +238,7 @@ export default function TopBar({
                 <p className="font-bold text-white truncate">{user?.username || user?.email}</p>
                 {user?.current_balance != null && (
                   <p className="text-emerald-400 text-[11px] mt-0.5">
-                    ${Number(user.current_balance).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    {formatPrice(user.current_balance, 'USD')}
                   </p>
                 )}
               </div>

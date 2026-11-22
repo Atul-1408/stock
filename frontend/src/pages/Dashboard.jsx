@@ -33,7 +33,7 @@ const DEFAULT_TICKERS = [
 ];
 
 export default function Dashboard() {
-  const { currency, convertPrice } = useCurrency();
+  const { currency, convertPrice, formatPrice } = useCurrency();
 
   const [activeSymbol, setActiveSymbol] = useState("AAPL");
   const [loading, setLoading] = useState(false);
@@ -160,15 +160,15 @@ export default function Dashboard() {
             <div>
               <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">PORTFOLIO EQUITY</div>
               <div className="text-sm font-bold text-white">
-                ${Number((user?.current_balance || 0) + (portfolio?.total_market_value || 0)).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                {formatPrice((user?.current_balance || 0) + (portfolio?.total_market_value || 0), 'USD')}
               </div>
             </div>
           </div>
 
           <div className="text-right pr-1">
             <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">UNREALIZED P&L</div>
-            <div className={`text-xs font-bold ${portfolio.total_pnl >= 0 ? "text-emerald-400" : "text-coral-400"}`}>
-              {portfolio.total_pnl >= 0 ? "+" : ""}${Number(portfolio.total_pnl || 0).toFixed(2)}
+            <div className={`text-xs font-bold ${(portfolio.total_pnl || 0) >= 0 ? "text-emerald-400" : "text-coral-400"}`}>
+              {(portfolio.total_pnl || 0) >= 0 ? "▲ +" : "▼ "}{formatPrice(Math.abs(portfolio.total_pnl || 0), 'USD')}
             </div>
           </div>
         </div>
@@ -190,10 +190,12 @@ export default function Dashboard() {
 
           {latestPrice != null && (
             <div className="flex items-baseline gap-2 pl-3 border-l border-white/10">
-              <span className="text-lg font-bold text-white">${latestPrice.toFixed(2)}</span>
+              <span className="text-lg font-bold text-white">
+                {formatPrice(latestPrice, getNativeCurrency(activeSymbol))}
+              </span>
               <span className={`text-xs font-bold flex items-center gap-0.5 ${isUp ? "text-emerald-400" : "text-coral-400"}`}>
                 {isUp ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {isUp ? "+" : ""}{priceDelta.toFixed(2)} ({priceDeltaPct.toFixed(2)}%)
+                {isUp ? "+" : ""}{formatPrice(priceDelta, getNativeCurrency(activeSymbol))} ({priceDeltaPct.toFixed(2)}%)
               </span>
             </div>
           )}
@@ -273,9 +275,9 @@ export default function Dashboard() {
                       <tr key={h.ticker} className="hover:bg-white/5 transition-colors">
                         <td className="py-2.5 font-bold text-white">{h.ticker}</td>
                         <td className="py-2.5 text-right text-slate-200">{Number(h.shares).toLocaleString()}</td>
-                        <td className="py-2.5 text-right text-slate-300">${Number(h.avg_buy_price).toFixed(2)}</td>
-                        <td className="py-2.5 text-right text-white font-bold">${Number(h.current_value || h.total_invested).toFixed(2)}</td>
-                        <td className="py-2.5 text-right text-slate-400">${Number(h.total_invested).toFixed(2)}</td>
+                        <td className="py-2.5 text-right text-slate-300">{formatPrice(h.avg_buy_price, getNativeCurrency(h.ticker))}</td>
+                        <td className="py-2.5 text-right text-white font-bold">{formatPrice(h.current_value || h.total_invested, 'USD')}</td>
+                        <td className="py-2.5 text-right text-slate-400">{formatPrice(h.total_invested, 'USD')}</td>
                       </tr>
                     ))}
                   </tbody>

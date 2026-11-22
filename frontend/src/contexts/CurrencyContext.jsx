@@ -1,12 +1,50 @@
 import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
 import api from '../utils/api';
+import { formatCurrency } from '../utils/currency';
+
+const DEFAULT_RATES = {
+    USD: 1.0,
+    INR: 86.5,
+    EUR: 0.92,
+    GBP: 0.79,
+    JPY: 155.0,
+    AUD: 1.55,
+    CAD: 1.40,
+    CHF: 0.90,
+    CNY: 7.25,
+    SGD: 1.35,
+    HKD: 7.80,
+    AED: 3.67,
+    BRL: 5.80,
+    MXN: 20.5,
+    ZAR: 18.2,
+};
+
+const DEFAULT_CURRENCIES = [
+    { code: 'USD', name: 'US Dollar', symbol: '$', country_code: 'US' },
+    { code: 'INR', name: 'Indian Rupee', symbol: '₹', country_code: 'IN' },
+    { code: 'EUR', name: 'Euro', symbol: '€', country_code: 'EU' },
+    { code: 'GBP', name: 'British Pound', symbol: '£', country_code: 'GB' },
+    { code: 'JPY', name: 'Japanese Yen', symbol: '¥', country_code: 'JP' },
+    { code: 'AUD', name: 'Australian Dollar', symbol: 'A$', country_code: 'AU' },
+    { code: 'CAD', name: 'Canadian Dollar', symbol: 'C$', country_code: 'CA' },
+    { code: 'CHF', name: 'Swiss Franc', symbol: 'CHF ', country_code: 'CH' },
+    { code: 'CNY', name: 'Chinese Yuan', symbol: '¥', country_code: 'CN' },
+    { code: 'SGD', name: 'Singapore Dollar', symbol: 'S$', country_code: 'SG' },
+    { code: 'HKD', name: 'Hong Kong Dollar', symbol: 'HK$', country_code: 'HK' },
+    { code: 'AED', name: 'UAE Dirham', symbol: 'AED ', country_code: 'AE' },
+    { code: 'BRL', name: 'Brazilian Real', symbol: 'R$', country_code: 'BR' },
+    { code: 'MXN', name: 'Mexican Peso', symbol: 'MX$', country_code: 'MX' },
+    { code: 'ZAR', name: 'South African Rand', symbol: 'R', country_code: 'ZA' },
+];
 
 const CurrencyContext = createContext({
     currency: 'USD',
-    currencies: [],
-    rates: {},         // USD-based rates: { INR: 90.97, EUR: 0.92, ... }
+    currencies: DEFAULT_CURRENCIES,
+    rates: DEFAULT_RATES,
     setCurrency: () => { },
     convertPrice: (amount, fromCurrency) => amount,
+    formatPrice: (amount, fromCurrency) => `$${amount}`,
     loading: false,
 });
 
@@ -31,8 +69,8 @@ export function CurrencyProvider({ children }) {
     const [currency, setCurrencyState] = useState(() => {
         return localStorage.getItem('preferredCurrency') || 'USD';
     });
-    const [currencies, setCurrencies] = useState([]);
-    const [rates, setRates] = useState({});     // { INR: 90.97, EUR: 0.92, USD: 1.0, ... }
+    const [currencies, setCurrencies] = useState(DEFAULT_CURRENCIES);
+    const [rates, setRates] = useState(DEFAULT_RATES);
     const [loading, setLoading] = useState(true);
     const ratesRef = useRef(rates);
     ratesRef.current = rates;
@@ -46,19 +84,21 @@ export function CurrencyProvider({ children }) {
             // Fetch currency list
             try {
                 const { data } = await api.get('/currency/list');
-                setCurrencies(data.currencies || []);
+                if (data.currencies && data.currencies.length > 0) {
+                    setCurrencies(data.currencies);
+                }
             } catch (err) {
-                console.error('Failed to load currencies:', err);
+                console.error('Failed to load currencies, using defaults:', err);
             }
 
             // Fetch exchange rates (USD-based)
             try {
                 const { data } = await api.get('/currency/rates');
                 if (data.rates) {
-                    setRates(data.rates);
+                    setRates((prev) => ({ ...prev, ...data.rates }));
                 }
             } catch (err) {
-                console.error('Failed to load exchange rates:', err);
+                console.error('Failed to load exchange rates, using defaults:', err);
             }
 
             // Try to get user preference from backend (only if user is authenticated)
@@ -73,7 +113,6 @@ export function CurrencyProvider({ children }) {
                     }
                 }
             } catch (err) {
-                console.error('User currency fetch failed:', err);
                 // Not logged in or error, try auto-detect
                 const saved = localStorage.getItem('preferredCurrency');
                 if (!saved) {
@@ -83,10 +122,7 @@ export function CurrencyProvider({ children }) {
                             setCurrencyState(data.currency);
                             localStorage.setItem('preferredCurrency', data.currency);
                         }
-                    } catch (detectErr) {
-                        console.error('Auto-detection failed:', detectErr);
-                        // Use default USD
-                    }
+                    } catch (detectErr) {}
                 }
             }
             setLoading(false);
@@ -104,39 +140,41 @@ export function CurrencyProvider({ children }) {
                 await api.put('/user/currency', { currency: code });
             }
         } catch (err) {
-            console.error('Failed to save user currency preference:', err);
-            // Not logged in, just use localStorage
+            // Not logged in, stored locally
         }
     }, []);
 
     /**
      * Convert an amount from a given currency to the user's selected currency.
      * Uses triangular conversion via USD: amount → USD → target currency.
-     *
-     * @param {number} amount - The amount to convert
-     * @param {string} fromCurrency - Source currency code (e.g. 'INR', 'USD')
-     * @returns {number} - Converted amount
      */
-    const convertPrice = useCallback((amount, fromCurrency) => {
+    const convertPrice = useCallback((amount, fromCurrency = 'USD') => {
         if (amount == null || isNaN(amount)) return amount;
-        const currentRates = ratesRef.current;
-        const toCurrency = localStorage.getItem('preferredCurrency') || 'USD';
-        if (!fromCurrency || fromCurrency === toCurrency) return amount;
-        if (!currentRates || Object.keys(currentRates).length === 0) return amount;
+        const currentRates = { ...DEFAULT_RATES, ...ratesRef.current };
+        const toCurrency = currency || localStorage.getItem('preferredCurrency') || 'USD';
+        const numAmount = Number(amount);
+        if (!fromCurrency || fromCurrency === toCurrency) return numAmount;
 
-        // All rates are USD-based: rates[X] = how many X per 1 USD
-        const fromRate = currentRates[fromCurrency];  // e.g. INR = 90.97
-        const toRate = currentRates[toCurrency];      // e.g. EUR = 0.92
+        const fromRate = currentRates[fromCurrency] || 1.0;
+        const toRate = currentRates[toCurrency] || 1.0;
 
-        if (!fromRate || !toRate) return amount;
+        if (!fromRate || !toRate) return numAmount;
 
-        // Convert: amount in from → USD → to
-        const amountInUSD = amount / fromRate;
+        const amountInUSD = numAmount / fromRate;
         return amountInUSD * toRate;
-    }, []);
+    }, [currency]);
+
+    /**
+     * Format and convert an amount into the active preferred currency.
+     */
+    const formatPrice = useCallback((amount, fromCurrency = 'USD') => {
+        if (amount == null || isNaN(amount)) return '—';
+        const converted = convertPrice(Number(amount), fromCurrency);
+        return formatCurrency(converted, currency);
+    }, [currency, convertPrice]);
 
     return (
-        <CurrencyContext.Provider value={{ currency, currencies, rates, setCurrency, convertPrice, loading }}>
+        <CurrencyContext.Provider value={{ currency, currencies, rates, setCurrency, convertPrice, formatPrice, loading }}>
             {children}
         </CurrencyContext.Provider>
     );

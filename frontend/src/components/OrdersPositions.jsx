@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ClipboardList, BarChart3, XCircle, RefreshCw, AlertTriangle } from "lucide-react";
 import api from "../utils/api";
-import { useCurrency } from "../contexts/CurrencyContext";
+import { useCurrency, getNativeCurrency } from "../contexts/CurrencyContext";
 import { formatCurrency } from "../utils/currency";
 import { toast } from "react-toastify";
 
 export default function OrdersPositions() {
-  const { currency } = useCurrency();
+  const { currency, formatPrice } = useCurrency();
   const [activeTab, setActiveTab] = useState("orders");
   const [orders, setOrders] = useState([]);
   const [positions, setPositions] = useState([]);
@@ -101,7 +101,7 @@ export default function OrdersPositions() {
             <div className="text-[11px] font-bold">
               <span className="text-slate-500 mr-1.5">NET P&L:</span>
               <span className={totalPnl >= 0 ? "text-emerald-400" : "text-coral-400"}>
-                {totalPnl >= 0 ? "▲ +" : "▼ "}${Math.abs(Number(totalPnl)).toFixed(2)}
+                {totalPnl >= 0 ? "▲ +" : "▼ "}{formatPrice(Math.abs(Number(totalPnl)), 'USD')}
               </span>
             </div>
           )}
@@ -158,7 +158,7 @@ export default function OrdersPositions() {
                       <td className="py-2.5 px-3 text-slate-300 text-[11px]">{o.order_type}</td>
                       <td className="py-2.5 px-3 text-right text-slate-200">{Number(o.quantity).toLocaleString()}</td>
                       <td className="py-2.5 px-3 text-right text-slate-200">
-                        {o.price != null ? `$${Number(o.price).toFixed(2)}` : "MKT"}
+                        {o.price != null ? formatPrice(o.price, getNativeCurrency(o.symbol)) : "MKT"}
                       </td>
                       <td className="py-2.5 px-3">
                         <span
@@ -222,15 +222,15 @@ export default function OrdersPositions() {
                     <tr key={p.symbol} className="hover:bg-white/5 transition-colors">
                       <td className="py-2.5 px-3 font-bold text-white">{p.symbol}</td>
                       <td className="py-2.5 px-3 text-right text-slate-200">{Number(p.quantity).toLocaleString()}</td>
-                      <td className="py-2.5 px-3 text-right text-slate-300">${Number(p.avg_price).toFixed(2)}</td>
+                      <td className="py-2.5 px-3 text-right text-slate-300">{formatPrice(p.avg_price, getNativeCurrency(p.symbol))}</td>
                       <td className="py-2.5 px-3 text-right text-slate-300">
-                        {p.ltp != null ? `$${Number(p.ltp).toFixed(2)}` : "—"}
+                        {p.ltp != null ? formatPrice(p.ltp, getNativeCurrency(p.symbol)) : "—"}
                       </td>
                       <td className="py-2.5 px-3 text-right text-white font-bold">
-                        {p.current_value != null ? `$${Number(p.current_value).toFixed(2)}` : "—"}
+                        {p.current_value != null ? formatPrice(p.current_value, 'USD') : "—"}
                       </td>
                       <td className={`py-2.5 px-3 text-right font-bold ${p.pnl != null ? (pnlUp ? "text-emerald-400" : "text-coral-400") : "text-slate-400"}`}>
-                        {p.pnl != null ? `${pnlUp ? "▲ +" : "▼ "}$${Math.abs(Number(p.pnl)).toFixed(2)}` : "—"}
+                        {p.pnl != null ? `${pnlUp ? "▲ +" : "▼ "}${formatPrice(Math.abs(Number(p.pnl)), 'USD')}` : "—"}
                       </td>
                       <td className={`py-2.5 px-3 text-right font-bold ${p.pnl_pct != null ? (pnlUp ? "text-emerald-400" : "text-coral-400") : "text-slate-400"}`}>
                         {p.pnl_pct != null ? `${pnlUp ? "▲ +" : "▼ "}${Math.abs(Number(p.pnl_pct)).toFixed(2)}%` : "—"}
