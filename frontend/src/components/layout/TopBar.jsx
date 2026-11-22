@@ -9,6 +9,7 @@ import {
   LogOut,
   Wallet,
   Search,
+  X,
   ShieldCheck,
   ShieldAlert,
   Moon,
@@ -28,6 +29,27 @@ const ROUTE_LABELS = {
   "/chat": { desk: "INTEL", label: "NEURAL ASSISTANT" },
   "/leaderboard": { desk: "NETWORK", label: "GLOBAL RANKINGS" },
 };
+
+const POPULAR_SYMBOLS = [
+  { symbol: "AAPL", company_name: "Apple Inc.", exchange: "NASDAQ" },
+  { symbol: "MSFT", company_name: "Microsoft Corporation", exchange: "NASDAQ" },
+  { symbol: "GOOGL", company_name: "Alphabet Inc.", exchange: "NASDAQ" },
+  { symbol: "AMZN", company_name: "Amazon.com Inc.", exchange: "NASDAQ" },
+  { symbol: "NVDA", company_name: "NVIDIA Corporation", exchange: "NASDAQ" },
+  { symbol: "TSLA", company_name: "Tesla Inc.", exchange: "NASDAQ" },
+  { symbol: "META", company_name: "Meta Platforms Inc.", exchange: "NASDAQ" },
+  { symbol: "NFLX", company_name: "Netflix Inc.", exchange: "NASDAQ" },
+  { symbol: "RELIANCE.NS", company_name: "Reliance Industries", exchange: "NSE" },
+  { symbol: "TCS.NS", company_name: "Tata Consultancy Services", exchange: "NSE" },
+  { symbol: "HDFCBANK.NS", company_name: "HDFC Bank Ltd.", exchange: "NSE" },
+  { symbol: "INFY.NS", company_name: "Infosys Ltd.", exchange: "NSE" },
+  { symbol: "SBIN.NS", company_name: "State Bank of India", exchange: "NSE" },
+  { symbol: "TATAMOTORS.NS", company_name: "Tata Motors Ltd.", exchange: "NSE" },
+  { symbol: "WIPRO.NS", company_name: "Wipro Ltd.", exchange: "NSE" },
+  { symbol: "ICICIBANK.NS", company_name: "ICICI Bank Ltd.", exchange: "NSE" },
+  { symbol: "BAJFINANCE.NS", company_name: "Bajaj Finance Ltd.", exchange: "NSE" },
+  { symbol: "ADANIENT.NS", company_name: "Adani Enterprises Ltd.", exchange: "NSE" },
+];
 
 export default function TopBar({
   onMobileMenuToggle,
@@ -49,6 +71,7 @@ export default function TopBar({
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const searchRef = useRef(null);
+  const inputRef = useRef(null);
 
   // Fetch authenticated user info
   const fetchUser = async () => {
@@ -62,6 +85,19 @@ export default function TopBar({
 
   useEffect(() => {
     fetchUser();
+  }, []);
+
+  // Keyboard shortcut Ctrl+K / Cmd+K
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+        setIsSearching(true);
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
   }, []);
 
   // Close menus on outside click
@@ -78,27 +114,47 @@ export default function TopBar({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Quick symbol search
+  // Quick symbol search with instant local fallback
   useEffect(() => {
-    if (!searchQuery.trim()) {
+    const q = searchQuery.trim().toUpperCase();
+    if (!q) {
       setSearchResults([]);
       return;
     }
+
+    const localMatches = POPULAR_SYMBOLS.filter(
+      (s) => s.symbol.includes(q) || s.company_name.toUpperCase().includes(q)
+    );
+
     const timeout = setTimeout(async () => {
       try {
-        const res = await api.get(`/stocks/search?q=${encodeURIComponent(searchQuery)}&limit=6`);
-        setSearchResults(res.data?.results || []);
+        const res = await api.get(`/stocks/search?q=${encodeURIComponent(q)}&limit=6`);
+        if (res.data?.results && res.data.results.length > 0) {
+          setSearchResults(res.data.results);
+        } else {
+          setSearchResults(localMatches);
+        }
       } catch (err) {
-        setSearchResults([]);
+        setSearchResults(localMatches);
       }
-    }, 200);
+    }, 150);
     return () => clearTimeout(timeout);
   }, [searchQuery]);
 
   const handleSelectSymbol = (sym) => {
+    const cleanSym = (sym || "").trim().toUpperCase();
+    if (!cleanSym) return;
     setSearchQuery("");
     setIsSearching(false);
-    navigate(`/market?symbol=${sym}`);
+    navigate(`/dashboard?symbol=${encodeURIComponent(cleanSym)}`);
+  };
+
+  const handleSubmitSearch = (e) => {
+    if (e) e.preventDefault();
+    const query = searchQuery.trim().toUpperCase();
+    if (query) {
+      handleSelectSymbol(query);
+    }
   };
 
   const handleLogout = () => {
@@ -134,9 +190,16 @@ export default function TopBar({
 
       {/* Center: Global Symbol Search */}
       <div className="relative hidden md:block w-64 lg:w-80" ref={searchRef}>
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 w-3.5 h-3.5" />
+        <form onSubmit={handleSubmitSearch} className="relative">
+          <button
+            type="submit"
+            aria-label="Search symbol"
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400 focus:outline-none transition-colors"
+          >
+            <Search className="w-3.5 h-3.5" />
+          </button>
           <input
+            ref={inputRef}
             type="text"
             value={searchQuery}
             onChange={(e) => {
@@ -145,9 +208,29 @@ export default function TopBar({
             }}
             onFocus={() => setIsSearching(true)}
             placeholder="Search ticker, company... (Ctrl+K)"
-            className="w-full bg-[#0d1424] border border-white/10 rounded-lg py-1.5 pl-8 pr-3 text-xs text-slate-200 placeholder-slate-500 font-mono focus:outline-none focus:border-cyan-500/50 transition-colors"
+            className="w-full bg-[#0d1424] border border-white/10 rounded-lg py-1.5 pl-8 pr-16 text-xs text-slate-200 placeholder-slate-500 font-mono focus:outline-none focus:border-cyan-500/50 transition-colors"
           />
-        </div>
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery("");
+                setSearchResults([]);
+              }}
+              className="absolute right-10 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-0.5"
+              aria-label="Clear search"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+          <button
+            type="submit"
+            aria-label="Submit search"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 font-mono text-[10px] font-bold border border-cyan-500/30 transition-colors"
+          >
+            GO
+          </button>
+        </form>
 
         {/* Search Results Dropdown */}
         {isSearching && searchResults.length > 0 && (

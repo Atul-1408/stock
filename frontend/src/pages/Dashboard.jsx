@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   TrendingUp,
   TrendingDown,
@@ -34,8 +35,12 @@ const DEFAULT_TICKERS = [
 
 export default function Dashboard() {
   const { currency, convertPrice, formatPrice } = useCurrency();
+  const [searchParams] = useSearchParams();
+  const symbolParam = searchParams.get("symbol");
 
-  const [activeSymbol, setActiveSymbol] = useState("AAPL");
+  const [activeSymbol, setActiveSymbol] = useState(() => {
+    return symbolParam ? symbolParam.trim().toUpperCase() : "AAPL";
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -98,6 +103,15 @@ export default function Dashboard() {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (symbolParam) {
+      const clean = symbolParam.trim().toUpperCase();
+      if (clean && clean !== activeSymbol) {
+        fetchSymbolData(clean);
+      }
+    }
+  }, [symbolParam, fetchSymbolData, activeSymbol]);
 
   useEffect(() => {
     fetchMarketContext();

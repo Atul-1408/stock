@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Search,
   Filter,
@@ -19,6 +20,9 @@ import OrdersPositions from "../components/OrdersPositions";
 
 export default function MarketWatch() {
   const { currency } = useCurrency();
+  const [searchParams] = useSearchParams();
+  const symbolParam = searchParams.get("symbol");
+
   const [stocks, setStocks] = useState([]);
   const [indices, setIndices] = useState([]);
   const [exchanges, setExchanges] = useState([]);
@@ -26,11 +30,17 @@ export default function MarketWatch() {
   const [totalStocks, setTotalStocks] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => symbolParam ? symbolParam.trim().toUpperCase() : "");
   const [exchange, setExchange] = useState("all");
   const [sector, setSector] = useState("all");
   const [selectedStock, setSelectedStock] = useState(null);
   const [orderSide, setOrderSide] = useState("BUY");
+
+  useEffect(() => {
+    if (symbolParam) {
+      setSearch(symbolParam.trim().toUpperCase());
+    }
+  }, [symbolParam]);
 
   const fetchData = useCallback(async () => {
     try {
