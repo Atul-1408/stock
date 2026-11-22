@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { toast } from 'react-toastify';
 
 // Base URL configuration: prefers VITE_API_BASE_URL if set, falls back to relative '/api'
 const rawBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -122,10 +123,13 @@ api.interceptors.response.use(
 
         // 429: Rate Limit with Retry-After header support
         else if (status === 429) {
-            const retryAfter = error.response.headers?.['retry-after'];
+            const retryAfter = error.response.headers?.['retry-after'] || error.response.headers?.['Retry-After'];
             friendlyMessage = retryAfter
-                ? `Too many requests, retry in ${retryAfter} s.`
-                : (resData.message || 'Rate limit reached. Please wait a moment before sending more requests.');
+                ? `Too many requests, retry in ${retryAfter} s`
+                : (resData.message || 'Too many requests, please retry shortly');
+            try {
+                toast.error(friendlyMessage, { toastId: 'rate-limit-toast' });
+            } catch (e) {}
         }
 
         // 500: Server Error
