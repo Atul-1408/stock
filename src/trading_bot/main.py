@@ -141,9 +141,14 @@ def run_market_scan():
     Synchronous wrapper for the scan logic. 
     """
     # LOCAL IMPORTS TO FORCE SCOPE RESOLUTION
-    import market_analyzer
-    import pattern_recognition
-    import decision_engine
+    try:
+        import market_analyzer
+        import pattern_recognition
+        import decision_engine
+    except ImportError:
+        from trading_bot import market_analyzer
+        from trading_bot import pattern_recognition
+        from trading_bot import decision_engine
     
     # Explicit Globals
     global paper_exchange, notifier, event_manager
