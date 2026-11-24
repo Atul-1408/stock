@@ -64,8 +64,8 @@ class TickerService {
      * @returns {Promise<Object[]>} Array of ticker data
      */
     async _makeApiRequest(tickers, cacheKey) {
-        // Implement rate limiting - max 10 tickers per request
-        const batchSize = 10;
+        // Implement rate limiting - max 6 tickers per request for fast parallel loads
+        const batchSize = 6;
         const batches = [];
         
         for (let i = 0; i < tickers.length; i += batchSize) {
@@ -77,17 +77,16 @@ class TickerService {
         // Process batches sequentially to avoid rate limiting
         for (const batch of batches) {
             try {
-                const response = await api.get(`/ticker-tape?tickers=${batch.join(',')}`);
+                const response = await api.get(`/ticker-tape?tickers=${batch.join(',')}`, { timeout: 8000 });
                 if (response.data?.tickers) {
                     results.push(...response.data.tickers);
                 }
                 // Add small delay between batches
                 if (batches.length > 1) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                    await new Promise(resolve => setTimeout(resolve, 80));
                 }
             } catch (error) {
-                console.warn(`Failed to fetch batch:`, error);
-                // Add null data for failed tickers
+                // Silently handle fallback to prevent unhandled UI rejections
                 results.push(...batch.map(ticker => ({
                     ticker,
                     price: null,

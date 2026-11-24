@@ -31,24 +31,66 @@ const ROUTE_LABELS = {
 };
 
 const POPULAR_SYMBOLS = [
-  { symbol: "AAPL", company_name: "Apple Inc.", exchange: "NASDAQ" },
-  { symbol: "MSFT", company_name: "Microsoft Corporation", exchange: "NASDAQ" },
-  { symbol: "GOOGL", company_name: "Alphabet Inc.", exchange: "NASDAQ" },
-  { symbol: "AMZN", company_name: "Amazon.com Inc.", exchange: "NASDAQ" },
-  { symbol: "NVDA", company_name: "NVIDIA Corporation", exchange: "NASDAQ" },
-  { symbol: "TSLA", company_name: "Tesla Inc.", exchange: "NASDAQ" },
-  { symbol: "META", company_name: "Meta Platforms Inc.", exchange: "NASDAQ" },
-  { symbol: "NFLX", company_name: "Netflix Inc.", exchange: "NASDAQ" },
+  // Cryptocurrencies
+  { symbol: "BTC-USD", company_name: "Bitcoin (BTC)", exchange: "CRYPTO" },
+  { symbol: "ETH-USD", company_name: "Ethereum (ETH)", exchange: "CRYPTO" },
+  { symbol: "SOL-USD", company_name: "Solana (SOL)", exchange: "CRYPTO" },
+  { symbol: "DOGE-USD", company_name: "Dogecoin (DOGE)", exchange: "CRYPTO" },
+  { symbol: "BNB-USD", company_name: "Binance Coin (BNB)", exchange: "CRYPTO" },
+  { symbol: "XRP-USD", company_name: "XRP / Ripple", exchange: "CRYPTO" },
+  { symbol: "ADA-USD", company_name: "Cardano (ADA)", exchange: "CRYPTO" },
+  { symbol: "AVAX-USD", company_name: "Avalanche (AVAX)", exchange: "CRYPTO" },
+  { symbol: "LINK-USD", company_name: "Chainlink (LINK)", exchange: "CRYPTO" },
+  { symbol: "DOT-USD", company_name: "Polkadot (DOT)", exchange: "CRYPTO" },
+  { symbol: "MATIC-USD", company_name: "Polygon (MATIC)", exchange: "CRYPTO" },
+  { symbol: "LTC-USD", company_name: "Litecoin (LTC)", exchange: "CRYPTO" },
+  { symbol: "SHIB-USD", company_name: "Shiba Inu (SHIB)", exchange: "CRYPTO" },
+
+  // Indian Equities (NSE)
   { symbol: "RELIANCE.NS", company_name: "Reliance Industries", exchange: "NSE" },
   { symbol: "TCS.NS", company_name: "Tata Consultancy Services", exchange: "NSE" },
   { symbol: "HDFCBANK.NS", company_name: "HDFC Bank Ltd.", exchange: "NSE" },
   { symbol: "INFY.NS", company_name: "Infosys Ltd.", exchange: "NSE" },
+  { symbol: "ICICIBANK.NS", company_name: "ICICI Bank Ltd.", exchange: "NSE" },
+  { symbol: "BHARTIARTL.NS", company_name: "Bharti Airtel Ltd.", exchange: "NSE" },
   { symbol: "SBIN.NS", company_name: "State Bank of India", exchange: "NSE" },
   { symbol: "TATAMOTORS.NS", company_name: "Tata Motors Ltd.", exchange: "NSE" },
+  { symbol: "TATASTEEL.NS", company_name: "Tata Steel Ltd.", exchange: "NSE" },
   { symbol: "WIPRO.NS", company_name: "Wipro Ltd.", exchange: "NSE" },
-  { symbol: "ICICIBANK.NS", company_name: "ICICI Bank Ltd.", exchange: "NSE" },
   { symbol: "BAJFINANCE.NS", company_name: "Bajaj Finance Ltd.", exchange: "NSE" },
   { symbol: "ADANIENT.NS", company_name: "Adani Enterprises Ltd.", exchange: "NSE" },
+  { symbol: "ADANIPORTS.NS", company_name: "Adani Ports & SEZ", exchange: "NSE" },
+  { symbol: "ZOMATO.NS", company_name: "Zomato Ltd.", exchange: "NSE" },
+  { symbol: "ITC.NS", company_name: "ITC Ltd.", exchange: "NSE" },
+  { symbol: "LT.NS", company_name: "Larsen & Toubro Ltd.", exchange: "NSE" },
+  { symbol: "KOTAKBANK.NS", company_name: "Kotak Mahindra Bank", exchange: "NSE" },
+  { symbol: "MARUTI.NS", company_name: "Maruti Suzuki India", exchange: "NSE" },
+  { symbol: "TITAN.NS", company_name: "Titan Company Ltd.", exchange: "NSE" },
+  { symbol: "SUNPHARMA.NS", company_name: "Sun Pharmaceutical", exchange: "NSE" },
+  { symbol: "HINDUNILVR.NS", company_name: "Hindustan Unilever", exchange: "NSE" },
+  { symbol: "NTPC.NS", company_name: "NTPC Ltd.", exchange: "NSE" },
+  { symbol: "POWERGRID.NS", company_name: "Power Grid Corp", exchange: "NSE" },
+
+  // US Equities (NASDAQ / NYSE)
+  { symbol: "AAPL", company_name: "Apple Inc.", exchange: "NASDAQ" },
+  { symbol: "MSFT", company_name: "Microsoft Corporation", exchange: "NASDAQ" },
+  { symbol: "NVDA", company_name: "NVIDIA Corporation", exchange: "NASDAQ" },
+  { symbol: "GOOGL", company_name: "Alphabet Inc. (Google)", exchange: "NASDAQ" },
+  { symbol: "AMZN", company_name: "Amazon.com Inc.", exchange: "NASDAQ" },
+  { symbol: "META", company_name: "Meta Platforms Inc.", exchange: "NASDAQ" },
+  { symbol: "TSLA", company_name: "Tesla Inc.", exchange: "NASDAQ" },
+  { symbol: "NFLX", company_name: "Netflix Inc.", exchange: "NASDAQ" },
+  { symbol: "AMD", company_name: "Advanced Micro Devices", exchange: "NASDAQ" },
+  { symbol: "ADBE", company_name: "Adobe Inc.", exchange: "NASDAQ" },
+  { symbol: "INTC", company_name: "Intel Corporation", exchange: "NASDAQ" },
+  { symbol: "CSCO", company_name: "Cisco Systems Inc.", exchange: "NASDAQ" },
+  { symbol: "COIN", company_name: "Coinbase Global Inc.", exchange: "NASDAQ" },
+  { symbol: "JPM", company_name: "JPMorgan Chase & Co.", exchange: "NYSE" },
+  { symbol: "V", company_name: "Visa Inc.", exchange: "NYSE" },
+  { symbol: "WMT", company_name: "Walmart Inc.", exchange: "NYSE" },
+  { symbol: "DIS", company_name: "Walt Disney Company", exchange: "NYSE" },
+  { symbol: "BA", company_name: "Boeing Company", exchange: "NYSE" },
+  { symbol: "UBER", company_name: "Uber Technologies", exchange: "NYSE" },
 ];
 
 export default function TopBar({
@@ -122,9 +164,22 @@ export default function TopBar({
       return;
     }
 
-    const localMatches = POPULAR_SYMBOLS.filter(
-      (s) => s.symbol.includes(q) || s.company_name.toUpperCase().includes(q)
-    );
+    const localMatches = POPULAR_SYMBOLS.filter((s) => {
+      const sym = s.symbol.toUpperCase();
+      const baseSym = sym.replace("-USD", "").replace(".NS", "");
+      const name = s.company_name.toUpperCase();
+      const ex = (s.exchange || "").toUpperCase();
+      return (
+        sym.includes(q) ||
+        baseSym.includes(q) ||
+        name.includes(q) ||
+        (q === "CRYPTO" && ex === "CRYPTO") ||
+        (q === "NSE" && ex === "NSE") ||
+        (q === "NASDAQ" && ex === "NASDAQ") ||
+        (q === "US" && (ex === "NASDAQ" || ex === "NYSE")) ||
+        (q === "INDIA" && ex === "NSE")
+      );
+    });
 
     const timeout = setTimeout(async () => {
       try {

@@ -681,6 +681,12 @@ def init_db() -> None:
 
         conn.commit()
 
+    # Seed baseline stock universe if empty or sparsely populated
+    try:
+        seed_stock_universe()
+    except Exception as e:
+        print(f"Warning: Failed to seed default stock universe: {e}")
+
 
 def insert_articles(ticker: str, articles: List[Dict]) -> int:
     """Insert article records and return count of inserted rows."""
@@ -1699,11 +1705,153 @@ def search_stock_universe(query: str, exchange: str = 'all', sector: str = 'all'
             sql += " AND sector = ?"
             params.append(sector)
 
-        sql += " ORDER BY market_cap DESC LIMIT ?"
+        sql += " ORDER BY CASE WHEN market_cap IS NULL THEN 0 ELSE market_cap END DESC, symbol ASC LIMIT ?"
         params.append(limit)
 
         cursor.execute(sql, params)
         return [dict(row) for row in cursor.fetchall()]
+
+
+DEFAULT_BASELINE_UNIVERSE = [
+    # Top US Stocks
+    {"symbol": "AAPL", "company_name": "Apple Inc.", "exchange": "NASDAQ", "sector": "Technology", "industry": "Consumer Electronics", "country": "USA", "currency": "USD", "market_cap": 3400000000000, "last_price": 228.50, "prev_close": 226.80},
+    {"symbol": "MSFT", "company_name": "Microsoft Corporation", "exchange": "NASDAQ", "sector": "Technology", "industry": "Software - Infrastructure", "country": "USA", "currency": "USD", "market_cap": 3100000000000, "last_price": 420.25, "prev_close": 418.10},
+    {"symbol": "NVDA", "company_name": "NVIDIA Corporation", "exchange": "NASDAQ", "sector": "Technology", "industry": "Semiconductors", "country": "USA", "currency": "USD", "market_cap": 3200000000000, "last_price": 138.80, "prev_close": 135.20},
+    {"symbol": "GOOGL", "company_name": "Alphabet Inc. (Google)", "exchange": "NASDAQ", "sector": "Communication Services", "industry": "Internet Content & Information", "country": "USA", "currency": "USD", "market_cap": 2100000000000, "last_price": 178.60, "prev_close": 176.90},
+    {"symbol": "AMZN", "company_name": "Amazon.com Inc.", "exchange": "NASDAQ", "sector": "Consumer Cyclical", "industry": "Internet Retail", "country": "USA", "currency": "USD", "market_cap": 2000000000000, "last_price": 195.40, "prev_close": 194.10},
+    {"symbol": "META", "company_name": "Meta Platforms Inc.", "exchange": "NASDAQ", "sector": "Communication Services", "industry": "Internet Content & Information", "country": "USA", "currency": "USD", "market_cap": 1400000000000, "last_price": 585.00, "prev_close": 579.50},
+    {"symbol": "TSLA", "company_name": "Tesla Inc.", "exchange": "NASDAQ", "sector": "Consumer Cyclical", "industry": "Auto Manufacturers", "country": "USA", "currency": "USD", "market_cap": 800000000000, "last_price": 250.10, "prev_close": 245.80},
+    {"symbol": "NFLX", "company_name": "Netflix Inc.", "exchange": "NASDAQ", "sector": "Communication Services", "industry": "Entertainment", "country": "USA", "currency": "USD", "market_cap": 290000000000, "last_price": 725.30, "prev_close": 718.00},
+    {"symbol": "AMD", "company_name": "Advanced Micro Devices", "exchange": "NASDAQ", "sector": "Technology", "industry": "Semiconductors", "country": "USA", "currency": "USD", "market_cap": 220000000000, "last_price": 154.20, "prev_close": 151.80},
+    {"symbol": "ADBE", "company_name": "Adobe Inc.", "exchange": "NASDAQ", "sector": "Technology", "industry": "Software - Application", "country": "USA", "currency": "USD", "market_cap": 210000000000, "last_price": 512.40, "prev_close": 510.00},
+    {"symbol": "INTC", "company_name": "Intel Corporation", "exchange": "NASDAQ", "sector": "Technology", "industry": "Semiconductors", "country": "USA", "currency": "USD", "market_cap": 90000000000, "last_price": 24.30, "prev_close": 24.10},
+    {"symbol": "CSCO", "company_name": "Cisco Systems Inc.", "exchange": "NASDAQ", "sector": "Technology", "industry": "Communication Equipment", "country": "USA", "currency": "USD", "market_cap": 230000000000, "last_price": 57.80, "prev_close": 57.20},
+    {"symbol": "COIN", "company_name": "Coinbase Global Inc.", "exchange": "NASDAQ", "sector": "Financial Services", "industry": "Financial Data & Stock Exchanges", "country": "USA", "currency": "USD", "market_cap": 60000000000, "last_price": 298.50, "prev_close": 289.00},
+    {"symbol": "JPM", "company_name": "JPMorgan Chase & Co.", "exchange": "NYSE", "sector": "Financial Services", "industry": "Banks - Diversified", "country": "USA", "currency": "USD", "market_cap": 600000000000, "last_price": 224.60, "prev_close": 222.90},
+    {"symbol": "V", "company_name": "Visa Inc.", "exchange": "NYSE", "sector": "Financial Services", "industry": "Credit Services", "country": "USA", "currency": "USD", "market_cap": 560000000000, "last_price": 288.10, "prev_close": 286.40},
+    {"symbol": "WMT", "company_name": "Walmart Inc.", "exchange": "NYSE", "sector": "Consumer Defensive", "industry": "Discount Stores", "country": "USA", "currency": "USD", "market_cap": 670000000000, "last_price": 82.30, "prev_close": 81.70},
+    {"symbol": "DIS", "company_name": "Walt Disney Company", "exchange": "NYSE", "sector": "Communication Services", "industry": "Entertainment", "country": "USA", "currency": "USD", "market_cap": 190000000000, "last_price": 96.50, "prev_close": 95.80},
+    {"symbol": "BA", "company_name": "Boeing Company", "exchange": "NYSE", "sector": "Industrials", "industry": "Aerospace & Defense", "country": "USA", "currency": "USD", "market_cap": 95000000000, "last_price": 152.00, "prev_close": 150.50},
+    {"symbol": "UBER", "company_name": "Uber Technologies Inc.", "exchange": "NYSE", "sector": "Technology", "industry": "Software - Application", "country": "USA", "currency": "USD", "market_cap": 150000000000, "last_price": 74.20, "prev_close": 73.10},
+
+    # Top Indian Stocks (NSE)
+    {"symbol": "RELIANCE.NS", "company_name": "Reliance Industries Limited", "exchange": "NSE", "sector": "Energy", "industry": "Oil & Gas Refining & Marketing", "country": "India", "currency": "INR", "market_cap": 20000000000000, "last_price": 1262.50, "prev_close": 1255.00},
+    {"symbol": "TCS.NS", "company_name": "Tata Consultancy Services Limited", "exchange": "NSE", "sector": "Technology", "industry": "Information Technology Services", "country": "India", "currency": "INR", "market_cap": 15000000000000, "last_price": 4120.00, "prev_close": 4095.00},
+    {"symbol": "HDFCBANK.NS", "company_name": "HDFC Bank Limited", "exchange": "NSE", "sector": "Financial Services", "industry": "Banks - Private", "country": "India", "currency": "INR", "market_cap": 13000000000000, "last_price": 1680.00, "prev_close": 1672.00},
+    {"symbol": "ICICIBANK.NS", "company_name": "ICICI Bank Limited", "exchange": "NSE", "sector": "Financial Services", "industry": "Banks - Private", "country": "India", "currency": "INR", "market_cap": 8500000000000, "last_price": 1235.00, "prev_close": 1228.00},
+    {"symbol": "INFY.NS", "company_name": "Infosys Limited", "exchange": "NSE", "sector": "Technology", "industry": "Information Technology Services", "country": "India", "currency": "INR", "market_cap": 7500000000000, "last_price": 1825.00, "prev_close": 1812.00},
+    {"symbol": "BHARTIARTL.NS", "company_name": "Bharti Airtel Limited", "exchange": "NSE", "sector": "Communication Services", "industry": "Telecom Services", "country": "India", "currency": "INR", "market_cap": 9500000000000, "last_price": 1540.00, "prev_close": 1532.00},
+    {"symbol": "SBIN.NS", "company_name": "State Bank of India", "exchange": "NSE", "sector": "Financial Services", "industry": "Banks - Public", "country": "India", "currency": "INR", "market_cap": 7200000000000, "last_price": 810.00, "prev_close": 802.00},
+    {"symbol": "TATAMOTORS.NS", "company_name": "Tata Motors Limited", "exchange": "NSE", "sector": "Consumer Cyclical", "industry": "Auto Manufacturers", "country": "India", "currency": "INR", "market_cap": 3600000000000, "last_price": 978.00, "prev_close": 965.00},
+    {"symbol": "TATASTEEL.NS", "company_name": "Tata Steel Limited", "exchange": "NSE", "sector": "Basic Materials", "industry": "Steel", "country": "India", "currency": "INR", "market_cap": 1800000000000, "last_price": 148.50, "prev_close": 147.10},
+    {"symbol": "WIPRO.NS", "company_name": "Wipro Limited", "exchange": "NSE", "sector": "Technology", "industry": "Information Technology Services", "country": "India", "currency": "INR", "market_cap": 2900000000000, "last_price": 548.00, "prev_close": 542.50},
+    {"symbol": "BAJFINANCE.NS", "company_name": "Bajaj Finance Limited", "exchange": "NSE", "sector": "Financial Services", "industry": "Credit Services - NBFC", "country": "India", "currency": "INR", "market_cap": 4200000000000, "last_price": 6850.00, "prev_close": 6820.00},
+    {"symbol": "ADANIENT.NS", "company_name": "Adani Enterprises Limited", "exchange": "NSE", "sector": "Industrials", "industry": "Conglomerates", "country": "India", "currency": "INR", "market_cap": 3200000000000, "last_price": 2840.00, "prev_close": 2810.00},
+    {"symbol": "ADANIPORTS.NS", "company_name": "Adani Ports and SEZ Ltd.", "exchange": "NSE", "sector": "Industrials", "industry": "Marine Ports", "country": "India", "currency": "INR", "market_cap": 2800000000000, "last_price": 1280.00, "prev_close": 1265.00},
+    {"symbol": "ZOMATO.NS", "company_name": "Zomato Limited", "exchange": "NSE", "sector": "Consumer Cyclical", "industry": "Internet Retail & Delivery", "country": "India", "currency": "INR", "market_cap": 2400000000000, "last_price": 268.00, "prev_close": 262.50},
+    {"symbol": "ITC.NS", "company_name": "ITC Limited", "exchange": "NSE", "sector": "Consumer Defensive", "industry": "Tobacco & FMCG", "country": "India", "currency": "INR", "market_cap": 5800000000000, "last_price": 472.00, "prev_close": 469.00},
+    {"symbol": "LT.NS", "company_name": "Larsen & Toubro Limited", "exchange": "NSE", "sector": "Industrials", "industry": "Engineering & Construction", "country": "India", "currency": "INR", "market_cap": 4900000000000, "last_price": 3610.00, "prev_close": 3585.00},
+    {"symbol": "KOTAKBANK.NS", "company_name": "Kotak Mahindra Bank Limited", "exchange": "NSE", "sector": "Financial Services", "industry": "Banks - Private", "country": "India", "currency": "INR", "market_cap": 3500000000000, "last_price": 1780.00, "prev_close": 1765.00},
+    {"symbol": "MARUTI.NS", "company_name": "Maruti Suzuki India Limited", "exchange": "NSE", "sector": "Consumer Cyclical", "industry": "Auto Manufacturers", "country": "India", "currency": "INR", "market_cap": 3700000000000, "last_price": 11850.00, "prev_close": 11720.00},
+    {"symbol": "TITAN.NS", "company_name": "Titan Company Limited", "exchange": "NSE", "sector": "Consumer Cyclical", "industry": "Luxury Goods", "country": "India", "currency": "INR", "market_cap": 3000000000000, "last_price": 3410.00, "prev_close": 3390.00},
+    {"symbol": "SUNPHARMA.NS", "company_name": "Sun Pharmaceutical Industries", "exchange": "NSE", "sector": "Healthcare", "industry": "Drug Manufacturers", "country": "India", "currency": "INR", "market_cap": 4100000000000, "last_price": 1795.00, "prev_close": 1780.00},
+    {"symbol": "HINDUNILVR.NS", "company_name": "Hindustan Unilever Limited", "exchange": "NSE", "sector": "Consumer Defensive", "industry": "Household & Personal Products", "country": "India", "currency": "INR", "market_cap": 5600000000000, "last_price": 2420.00, "prev_close": 2405.00},
+    {"symbol": "NTPC.NS", "company_name": "NTPC Limited", "exchange": "NSE", "sector": "Utilities", "industry": "Utilities - Regulated Electric", "country": "India", "currency": "INR", "market_cap": 3800000000000, "last_price": 382.00, "prev_close": 378.00},
+    {"symbol": "POWERGRID.NS", "company_name": "Power Grid Corporation of India", "exchange": "NSE", "sector": "Utilities", "industry": "Utilities - Regulated Electric", "country": "India", "currency": "INR", "market_cap": 3100000000000, "last_price": 328.00, "prev_close": 324.50},
+
+    # Cryptocurrencies
+    {"symbol": "BTC-USD", "company_name": "Bitcoin (BTC)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Cryptocurrency", "country": "Global", "currency": "USD", "market_cap": 1800000000000, "last_price": 91500.00, "prev_close": 89800.00},
+    {"symbol": "ETH-USD", "company_name": "Ethereum (ETH)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Smart Contract Platform", "country": "Global", "currency": "USD", "market_cap": 390000000000, "last_price": 3350.00, "prev_close": 3280.00},
+    {"symbol": "SOL-USD", "company_name": "Solana (SOL)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Layer 1 Blockchain", "country": "Global", "currency": "USD", "market_cap": 95000000000, "last_price": 195.50, "prev_close": 188.20},
+    {"symbol": "DOGE-USD", "company_name": "Dogecoin (DOGE)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Payment Cryptocurrency", "country": "Global", "currency": "USD", "market_cap": 38000000000, "last_price": 0.385, "prev_close": 0.362},
+    {"symbol": "BNB-USD", "company_name": "Binance Coin (BNB)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Exchange Token", "country": "Global", "currency": "USD", "market_cap": 94000000000, "last_price": 645.00, "prev_close": 638.00},
+    {"symbol": "XRP-USD", "company_name": "XRP / Ripple", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Payment Network", "country": "Global", "currency": "USD", "market_cap": 82000000000, "last_price": 1.45, "prev_close": 1.38},
+    {"symbol": "ADA-USD", "company_name": "Cardano (ADA)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Smart Contract Platform", "country": "Global", "currency": "USD", "market_cap": 28000000000, "last_price": 0.78, "prev_close": 0.74},
+    {"symbol": "AVAX-USD", "company_name": "Avalanche (AVAX)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Layer 1 Blockchain", "country": "Global", "currency": "USD", "market_cap": 14000000000, "last_price": 38.20, "prev_close": 36.80},
+    {"symbol": "LINK-USD", "company_name": "Chainlink (LINK)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Decentralized Oracle", "country": "Global", "currency": "USD", "market_cap": 11000000000, "last_price": 17.50, "prev_close": 16.90},
+    {"symbol": "DOT-USD", "company_name": "Polkadot (DOT)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Interoperability", "country": "Global", "currency": "USD", "market_cap": 8000000000, "last_price": 8.40, "prev_close": 8.10},
+    {"symbol": "MATIC-USD", "company_name": "Polygon (MATIC)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Layer 2 Scaling", "country": "Global", "currency": "USD", "market_cap": 4500000000, "last_price": 0.52, "prev_close": 0.49},
+    {"symbol": "LTC-USD", "company_name": "Litecoin (LTC)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Payment Cryptocurrency", "country": "Global", "currency": "USD", "market_cap": 6500000000, "last_price": 88.00, "prev_close": 85.50},
+    {"symbol": "SHIB-USD", "company_name": "Shiba Inu (SHIB)", "exchange": "CRYPTO", "sector": "Digital Assets", "industry": "Meme Token", "country": "Global", "currency": "USD", "market_cap": 15000000000, "last_price": 0.000025, "prev_close": 0.000024},
+]
+
+
+def seed_stock_universe(force: bool = False) -> int:
+    """Seed stock_universe and baseline market_data_cache with top US, Indian, and Crypto assets."""
+    count = get_stock_universe_count()
+    if count >= 45 and not force:
+        return 0
+
+    inserted = 0
+    now = datetime.now(timezone.utc).isoformat()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        for item in DEFAULT_BASELINE_UNIVERSE:
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO stock_universe (
+                        symbol, company_name, exchange, sector, industry, market_cap, country, currency, is_active, last_updated
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                    ON CONFLICT(symbol) DO UPDATE SET
+                        company_name = excluded.company_name,
+                        exchange = excluded.exchange,
+                        sector = excluded.sector,
+                        industry = excluded.industry,
+                        market_cap = excluded.market_cap,
+                        country = excluded.country,
+                        currency = excluded.currency,
+                        is_active = 1,
+                        last_updated = excluded.last_updated
+                    """,
+                    (
+                        item["symbol"],
+                        item["company_name"],
+                        item["exchange"],
+                        item.get("sector"),
+                        item.get("industry"),
+                        item.get("market_cap"),
+                        item.get("country", "USA"),
+                        item.get("currency", "USD"),
+                        now,
+                    )
+                )
+
+                # Also ensure baseline entry in market_data_cache
+                lp = item.get("last_price")
+                pc = item.get("prev_close") or lp
+                chg_pct = round(((lp - pc) / pc * 100), 2) if (lp is not None and pc) else 0.0
+                cursor.execute(
+                    """
+                    INSERT INTO market_data_cache (
+                        symbol, last_price, open_price, high_price, low_price, prev_close, volume, change_pct, last_trade_time, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(symbol) DO UPDATE SET
+                        last_price = COALESCE(market_data_cache.last_price, excluded.last_price),
+                        prev_close = COALESCE(market_data_cache.prev_close, excluded.prev_close),
+                        change_pct = COALESCE(market_data_cache.change_pct, excluded.change_pct),
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        item["symbol"],
+                        lp,
+                        lp,
+                        lp,
+                        lp,
+                        pc,
+                        1000000,
+                        chg_pct,
+                        now,
+                        now,
+                    )
+                )
+                inserted += 1
+            except Exception:
+                continue
+        conn.commit()
+    return inserted
 
 
 def get_stock_universe_count() -> int:
@@ -1769,6 +1917,9 @@ def get_market_data(symbol: str) -> Optional[Dict]:
         cursor.execute("SELECT * FROM market_data_cache WHERE symbol = ?", (symbol,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+get_cached_market_data = get_market_data
 
 
 def get_market_data_bulk(symbols: List[str]) -> List[Dict]:

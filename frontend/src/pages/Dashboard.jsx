@@ -81,24 +81,35 @@ export default function Dashboard() {
     setError("");
 
     try {
-      const [sentRes, priceRes, newsRes] = await Promise.all([
-        api.get(`/sentiment/${cleanSym}`),
-        api.get(`/prices/${cleanSym}`),
-        api.get(`/news/${cleanSym}`),
+      const [sentRes, priceRes, newsRes] = await Promise.allSettled([
+        api.get(`/sentiment/${cleanSym}`, { timeout: 8000 }),
+        api.get(`/prices/${cleanSym}`, { timeout: 8000 }),
+        api.get(`/news/${cleanSym}`, { timeout: 8000 }),
       ]);
 
-      setSentiments(sentRes.data?.data || []);
-      setPrices(priceRes.data?.data || []);
-      setNews(newsRes.data?.data || []);
+      let hasPrice = false;
+      if (priceRes.status === "fulfilled" && priceRes.value.data?.data?.length) {
+        setPrices(priceRes.value.data.data);
+        hasPrice = true;
+      }
+      if (sentRes.status === "fulfilled" && sentRes.value.data?.data) {
+        setSentiments(sentRes.value.data.data);
+      }
+      if (newsRes.status === "fulfilled" && newsRes.value.data?.data) {
+        setNews(newsRes.value.data.data);
+      }
+
+      if (!hasPrice) {
+        setError(
+          priceRes.status === "rejected" && priceRes.reason?.response?.status === 404
+            ? `Symbol '${cleanSym}' not found in active market cache.`
+            : "Temporary data feed connection error. Retrying..."
+        );
+      } else {
+        setError("");
+      }
     } catch (err) {
-      setSentiments([]);
-      setPrices([]);
-      setNews([]);
-      setError(
-        err.response?.status === 404
-          ? `Symbol '${cleanSym}' not found in active market cache.`
-          : "Temporary data feed connection error. Retrying..."
-      );
+      setError("Temporary data feed connection error. Retrying...");
     } finally {
       setLoading(false);
     }

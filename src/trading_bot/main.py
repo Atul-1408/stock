@@ -25,10 +25,10 @@ def force_ipv4_socket_patch():
             if 'family' in kwargs:
                  if kwargs['family'] == socket.AF_UNSPEC:
                      kwargs['family'] = socket.AF_INET
-            elif len(args) > 1 and args[1] == socket.AF_UNSPEC:
+            elif len(args) > 2 and args[2] == socket.AF_UNSPEC:
                  # args is (host, port, family, type, proto, flags)
                  lst = list(args)
-                 lst[1] = socket.AF_INET
+                 lst[2] = socket.AF_INET
                  args = tuple(lst)
                  
             try:
@@ -294,8 +294,17 @@ def execute_trade(signal, ticker, current_price, df):
         notifier.notify_trade(full_symbol, "LONG", current_price, qty, stop_loss, target)
 
 # Global Persistent Loop for Sync Wrapper
-_loop = asyncio.new_event_loop()
-asyncio.set_event_loop(_loop)
+_loop = None
+
+def get_loop():
+    global _loop
+    if _loop is None or _loop.is_closed():
+        try:
+            _loop = asyncio.get_event_loop()
+        except RuntimeError:
+            _loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(_loop)
+    return _loop
 
 def send_async_alert(msg, ticker=None, alert_type="bot_signal", sentiment=None, price=None):
     """Helper to run async alert using persistent loop via the notifier."""

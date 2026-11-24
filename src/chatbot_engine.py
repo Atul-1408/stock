@@ -1,11 +1,25 @@
-from google import genai
-from google.genai import types as genai_types
 import os
 from datetime import datetime, timezone
 import json
 import re
 from typing import Optional
 from config import Config
+
+# Lazy-loaded genai modules
+genai = None
+genai_types = None
+
+def _load_genai():
+    global genai, genai_types
+    if genai is None:
+        try:
+            from google import genai as g_genai
+            from google.genai import types as g_types
+            genai = g_genai
+            genai_types = g_types
+        except ImportError:
+            pass
+    return genai, genai_types
 
 class TradingChatbot:
     def __init__(self):
@@ -19,7 +33,10 @@ class TradingChatbot:
         try:
             if not api_key:
                 raise ValueError("GEMINI_API_KEY environment variable is not set.")
-            self.client = genai.Client(api_key=api_key)
+            g_mod, _ = _load_genai()
+            if not g_mod:
+                raise ValueError("google-genai library not available.")
+            self.client = g_mod.Client(api_key=api_key)
         except Exception as e:
             print(f"Gemini Init Error: {e}")
             self.client = None

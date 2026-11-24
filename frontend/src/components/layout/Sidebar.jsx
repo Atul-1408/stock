@@ -55,13 +55,13 @@ export default function Sidebar({ isCollapsed, setIsCollapsed, isMobileOpen, set
       {isMobileOpen && (
         <div
           onClick={() => setIsMobileOpen(false)}
-          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 lg:hidden"
+          className="fixed inset-0 top-8 bg-black/70 backdrop-blur-sm z-30 lg:hidden"
         />
       )}
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-50 flex flex-col bg-[#070b12] border-r border-white/10 transition-all duration-200 select-none
+        className={`fixed top-8 bottom-0 left-0 z-40 flex flex-col bg-[#070b12] border-r border-white/10 transition-all duration-200 select-none
           ${isCollapsed ? "w-[68px]" : "w-[240px]"}
           ${isMobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
         `}

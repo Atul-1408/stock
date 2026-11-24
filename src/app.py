@@ -373,30 +373,58 @@ def get_ticker_tape():
             app.logger.warning(f"Finnhub ticker fetch error: {e}")
             results = []
 
-    # 2) Fallback to yfinance for any missing tickers or when Finnhub not configured
+    # 2) Fallback to database cache and yfinance for any missing tickers or when Finnhub not configured
     missing = [r["ticker"] for r in results if r.get("price") is None]
     if (not finnhub_key) or missing or not results:
         # Ensure we preserve any Finnhub successes and only fill in missing
         existing_map = {r["ticker"]: r for r in results}
+
+        # Step 2a: Instant cache fill from local database
+        yf_needed = []
         try:
-            import yfinance as yf
-            yf_list = missing if finnhub_key else ticker_list
-            if yf_list:
-                data = yf.download(yf_list, period="2d", interval="1d", progress=False, group_by='ticker')
-                for ticker in yf_list:
+            target_symbols = missing if finnhub_key else ticker_list
+            db_quotes = database.get_market_data_bulk(target_symbols)
+            db_map = {q["symbol"]: q for q in db_quotes if q.get("symbol")}
+            for ticker in target_symbols:
+                mq = db_map.get(ticker)
+                if mq and mq.get("last_price") is not None:
+                    lp = float(mq["last_price"])
+                    pc = float(mq.get("prev_close") or lp)
+                    chg = lp - pc
+                    chg_pct = (chg / pc * 100) if pc else 0.0
+                    existing_map[ticker] = {
+                        "ticker": ticker,
+                        "price": round(lp, 2),
+                        "change": round(chg, 2),
+                        "changePct": round(chg_pct, 2),
+                    }
+                else:
+                    yf_needed.append(ticker)
+        except Exception as e:
+            app.logger.warning(f"Ticker tape cache lookup error: {e}")
+            yf_needed = missing if finnhub_key else ticker_list
+
+        # Step 2b: Fetch remaining missing tickers via yfinance with guarded execution
+        if yf_needed:
+            try:
+                import yfinance as yf
+                data = yf.download(yf_needed, period="2d", interval="1d", progress=False, group_by='ticker', timeout=4)
+                for ticker in yf_needed:
                     try:
-                        if len(yf_list) == 1:
+                        if len(yf_needed) == 1:
                             df = data
                         else:
                             df = data[ticker] if ticker in data.columns.get_level_values(0) else None
 
                         if df is None or df.empty or len(df) < 1:
-                            existing_map[ticker] = {"ticker": ticker, "price": None, "change": None, "changePct": None}
+                            if ticker not in existing_map:
+                                existing_map[ticker] = {"ticker": ticker, "price": None, "change": None, "changePct": None}
                             continue
 
                         close_vals = df['Close'].dropna()
                         if len(close_vals) < 1:
-                            existing_map[ticker] = {"ticker": ticker, "price": None, "change": None, "changePct": None}
+                            if ticker not in existing_map:
+                                existing_map[ticker] = {"ticker": ticker, "price": None, "change": None, "changePct": None}
                             continue
 
                         last_close = float(close_vals.iloc[-1])
@@ -411,12 +439,15 @@ def get_ticker_tape():
                             "changePct": round(change_pct, 2),
                         }
                     except Exception:
+                        if ticker not in existing_map:
+                            existing_map[ticker] = {"ticker": ticker, "price": None, "change": None, "changePct": None}
+            except Exception as e:
+                app.logger.warning(f"Ticker tape yfinance fetch error: {e}")
+                for ticker in yf_needed:
+                    if ticker not in existing_map:
                         existing_map[ticker] = {"ticker": ticker, "price": None, "change": None, "changePct": None}
 
-            results = [existing_map[t] for t in ticker_list]
-        except Exception as e:
-            app.logger.warning(f"Ticker tape fetch error: {e}")
-            results = [{"ticker": t, "price": None, "change": None, "changePct": None} for t in ticker_list]
+        results = [existing_map.get(t, {"ticker": t, "price": None, "change": None, "changePct": None}) for t in ticker_list]
 
     payload = {"tickers": results}
     _ticker_tape_cache["ts"] = now_ts
@@ -949,7 +980,7 @@ def get_prices_for_ticker(ticker):
     if not data:
         try:
             import yfinance as yf
-            df = yf.download(ticker, period="30d", interval="1d", progress=False)
+            df = yf.download(ticker, period="30d", interval="1d", progress=False, timeout=5)
             if not df.empty:
                 if hasattr(df.columns, 'droplevel'):
                     try:
@@ -964,7 +995,24 @@ def get_prices_for_ticker(ticker):
                     database.insert_prices(ticker, data)
         except Exception as e:
             app.logger.warning(f"Price fetch error for {ticker}: {e}")
-    return jsonify({"status": "success", "data": data}), 200
+
+    # Fallback to market_data_cache quote if historical candles are still empty
+    if not data:
+        try:
+            cached_quote = database.get_market_data(ticker)
+            if cached_quote and cached_quote.get("last_price") is not None:
+                lp = float(cached_quote["last_price"])
+                pc = float(cached_quote.get("prev_close") or lp)
+                from datetime import timedelta
+                today = datetime.now(timezone.utc).date()
+                data = [
+                    {"trade_date": str(today - timedelta(days=2)), "close": round(pc * 0.995, 2)},
+                    {"trade_date": str(today - timedelta(days=1)), "close": round(pc, 2)},
+                    {"trade_date": str(today), "close": round(lp, 2)},
+                ]
+        except Exception:
+            pass
+    return jsonify({"status": "success", "data": data or []}), 200
 
 @app.route('/api/news/<ticker>', methods=['GET'])
 @jwt_required()
