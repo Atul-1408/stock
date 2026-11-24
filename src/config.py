@@ -56,6 +56,10 @@ class Config:
     # Rate Limiting Storage URI
     RATELIMIT_STORAGE_URI = os.getenv("RATELIMIT_STORAGE_URI", "memory://")
 
+    # Reverse proxy trust & HTTP payload limits
+    TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", "1" if IS_PRODUCTION else "0"))
+    MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", str(2 * 1024 * 1024)))
+
     # Max price age for market data before considered stale (in seconds, default 15 min = 900s)
     MAX_PRICE_AGE_SECONDS = int(os.getenv("MAX_PRICE_AGE_SECONDS", "900"))
 

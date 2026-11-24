@@ -17,6 +17,7 @@ from flask_jwt_extended import (
     jwt_required, get_jwt, get_jwt_identity
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -41,6 +42,15 @@ app = Flask(
     static_folder=os.path.join("..", "frontend", "dist")
 )
 app.url_map.strict_slashes = False
+app.config['MAX_CONTENT_LENGTH'] = Config.MAX_CONTENT_LENGTH
+if Config.TRUSTED_PROXY_COUNT > 0:
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=Config.TRUSTED_PROXY_COUNT,
+        x_proto=Config.TRUSTED_PROXY_COUNT,
+        x_host=Config.TRUSTED_PROXY_COUNT,
+        x_prefix=Config.TRUSTED_PROXY_COUNT,
+    )
 
 # Production Setup
 error_handler.setup_logging(app)
@@ -102,6 +112,8 @@ def after_request(response):
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    response.headers['X-Permitted-Cross-Domain-Policies'] = 'none'
     if Config.IS_PRODUCTION:
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response

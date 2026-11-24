@@ -2,12 +2,25 @@ services:
   app:
     build: .
     ports: ["5000:5000"]
-    env_file: .env          # JWT_SECRET_KEY must be a real 32+ char secret in production
+    env_file:
+      - path: .env          # JWT_SECRET_KEY must be a real 32+ char secret in production
+        required: false
     environment:
       DATABASE_PATH: /app/data/stock_dashboard.db
       # Set RATELIMIT_STORAGE_URI (e.g. redis://redis:6379/0) before scaling gunicorn workers > 1
     volumes:
       - stock-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 volumes:
   stock-data:

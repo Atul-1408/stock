@@ -61,6 +61,13 @@ class TestPhase7ProductionReadiness(unittest.TestCase):
         self.assertEqual(headers.get("X-XSS-Protection"), "1; mode=block")
         self.assertEqual(headers.get("Referrer-Policy"), "strict-origin-when-cross-origin")
         self.assertEqual(headers.get("Cross-Origin-Opener-Policy"), "same-origin-allow-popups")
+        self.assertEqual(headers.get("Permissions-Policy"), "camera=(), microphone=(), geolocation=()")
+        self.assertEqual(headers.get("X-Permitted-Cross-Domain-Policies"), "none")
+
+    def test_03b_max_content_length_configured(self):
+        """Verify HTTP request payload size limit is enforced."""
+        self.assertIsNotNone(app.config.get("MAX_CONTENT_LENGTH"))
+        self.assertLessEqual(app.config["MAX_CONTENT_LENGTH"], 10 * 1024 * 1024)
 
     def test_04_production_config_validation(self):
         """Verify production validator detects unsafe settings."""
