@@ -4,6 +4,7 @@ Updates market_data_cache and market_indices in the database
 at regular intervals using yfinance.
 """
 
+import os
 import threading
 import time
 from datetime import datetime
@@ -15,9 +16,10 @@ import database
 class MarketDataFeed:
     """Background polling loop for live market data."""
 
-    def __init__(self, stock_interval=30, index_interval=60):
-        self.stock_interval = stock_interval  # seconds between stock price updates
-        self.index_interval = index_interval  # seconds between index updates
+    def __init__(self, stock_interval=180, index_interval=300):
+        # Default to 180s/300s to avoid rapid Yahoo Finance rate limits
+        self.stock_interval = int(os.getenv("MARKET_DATA_POLL_INTERVAL", str(stock_interval)))
+        self.index_interval = int(os.getenv("INDEX_DATA_POLL_INTERVAL", str(index_interval)))
         self._running = False
         self._thread = None
 

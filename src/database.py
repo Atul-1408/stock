@@ -1674,6 +1674,31 @@ def bulk_insert_stocks(stocks_data: List[Dict]) -> int:
                 inserted += 1
             except Exception:
                 continue
+
+        # Baseline market indices
+        DEFAULT_INDICES = [
+            ("NIFTY50", "NIFTY 50", 24140.50, 24050.00, 24200.00, 24000.00, 24032.00, 0.45),
+            ("SENSEX", "BSE SENSEX", 79486.30, 79200.00, 79600.00, 79100.00, 79155.00, 0.42),
+            ("SP500", "S&P 500", 5983.99, 5960.00, 5990.00, 5950.00, 5961.00, 0.38),
+            ("NASDAQ", "NASDAQ Composite", 19081.40, 19000.00, 19120.00, 18980.00, 18977.00, 0.55),
+            ("DOW", "Dow Jones", 43729.34, 43650.00, 43800.00, 43600.00, 43620.00, 0.25),
+        ]
+        for idx in DEFAULT_INDICES:
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO market_indices (index_name, display_name, current_value, open_value, high_value, low_value, prev_close, change_pct, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(index_name) DO UPDATE SET
+                        current_value = COALESCE(market_indices.current_value, excluded.current_value),
+                        display_name = excluded.display_name,
+                        updated_at = excluded.updated_at
+                    """,
+                    (idx[0], idx[1], idx[2], idx[3], idx[4], idx[5], idx[6], idx[7], now)
+                )
+            except Exception:
+                pass
+
         conn.commit()
     return inserted
 
@@ -1850,6 +1875,31 @@ def seed_stock_universe(force: bool = False) -> int:
                 inserted += 1
             except Exception:
                 continue
+
+        # Baseline market indices
+        DEFAULT_INDICES = [
+            ("NIFTY50", "NIFTY 50", 24140.50, 24050.00, 24200.00, 24000.00, 24032.00, 0.45),
+            ("SENSEX", "BSE SENSEX", 79486.30, 79200.00, 79600.00, 79100.00, 79155.00, 0.42),
+            ("SP500", "S&P 500", 5983.99, 5960.00, 5990.00, 5950.00, 5961.00, 0.38),
+            ("NASDAQ", "NASDAQ Composite", 19081.40, 19000.00, 19120.00, 18980.00, 18977.00, 0.55),
+            ("DOW", "Dow Jones", 43729.34, 43650.00, 43800.00, 43600.00, 43620.00, 0.25),
+        ]
+        for idx in DEFAULT_INDICES:
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO market_indices (index_name, display_name, current_value, open_value, high_value, low_value, prev_close, change_pct, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(index_name) DO UPDATE SET
+                        current_value = COALESCE(market_indices.current_value, excluded.current_value),
+                        display_name = excluded.display_name,
+                        updated_at = excluded.updated_at
+                    """,
+                    (idx[0], idx[1], idx[2], idx[3], idx[4], idx[5], idx[6], idx[7], now)
+                )
+            except Exception:
+                pass
+
         conn.commit()
     return inserted
 
