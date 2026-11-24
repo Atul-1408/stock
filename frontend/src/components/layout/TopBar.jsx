@@ -222,7 +222,10 @@ export default function TopBar({
   const initials = (user?.username?.[0] || user?.email?.[0] || "U").toUpperCase();
 
   return (
-    <header className="h-14 bg-[#070b12] border-b border-white/10 px-3 md:px-5 flex items-center justify-between sticky top-8 z-30 select-none">
+    <header
+      style={{ top: "32px" }}
+      className="h-14 bg-[#070b12] border-b border-white/10 px-3 md:px-5 flex items-center justify-between sticky top-8 z-30 select-none"
+    >
       {/* Left: Mobile Toggle & Breadcrumb Tag */}
       <div className="flex items-center gap-3">
         <button

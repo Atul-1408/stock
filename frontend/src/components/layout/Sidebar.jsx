@@ -61,13 +61,14 @@ export default function Sidebar({ isCollapsed, setIsCollapsed, isMobileOpen, set
 
       {/* Sidebar Container */}
       <aside
+        style={{ top: "32px", height: "calc(100vh - 32px)" }}
         className={`fixed top-8 bottom-0 left-0 z-40 flex flex-col bg-[#070b12] border-r border-white/10 transition-all duration-200 select-none
           ${isCollapsed ? "w-[68px]" : "w-[240px]"}
           ${isMobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
         `}
       >
         {/* Sidebar Header / Branding */}
-        <div className="h-14 flex items-center justify-between px-4 border-b border-white/10 bg-[#090e17]">
+        <div className="h-14 flex items-center justify-between px-4 border-b border-white/10 bg-[#090e17] overflow-hidden flex-shrink-0">
           <Link
             to="/dashboard"
             onClick={() => setIsMobileOpen(false)}
@@ -100,7 +101,7 @@ export default function Sidebar({ isCollapsed, setIsCollapsed, isMobileOpen, set
         </div>
 
         {/* Navigation Sections */}
-        <div className="flex-1 py-4 px-2 space-y-6 overflow-y-auto custom-scrollbar">
+        <div className="flex-1 py-4 px-2 space-y-6 overflow-y-auto overflow-x-hidden custom-scrollbar">
           {NAV_GROUPS.map((group) => (
             <div key={group.title} className="space-y-1">
               {!isCollapsed && (
